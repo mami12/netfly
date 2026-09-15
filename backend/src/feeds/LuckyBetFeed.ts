@@ -74,6 +74,12 @@ export class LuckyBetFeed implements IFeedProvider {
   private liveIds: number[] = [];
   private catNames = new Map<number, string>();
   private catSlugs = new Map<number, string>();
+  // Cache ne memorie: me DB remote (Neon) shmangen ~5 pyetje/ndeshje
+  private sportId: number | null = null;
+  private catIds = new Map<string, number>();      // catName -> id
+  private tourIds = new Map<string, number>();     // catId|tourSlug -> id
+  private matchSig = new Map<string, string>();    // dbId -> "home|away|start|status"
+  private lastNamesLoad = 0;
 
   private oddsCbs: ((delta: OddsDelta) => void)[] = [];
   private statusCbs: ((matchId: string, status: string, minute: number, homeScore: number, awayScore: number) => void)[] = [];
@@ -144,7 +150,10 @@ export class LuckyBetFeed implements IFeedProvider {
       api('/matches/get-many', { sportId: 18, service: 'live', limit: 2000 }),
       api('/matches/get-many', { sportId: 18, service: 'prematch', limit: 2000 })
     ]);
-    await this.loadNames();
+    if (Date.now() - this.lastNamesLoad > 10 * 60 * 1000) {
+      await this.loadNames();
+      this.lastNamesLoad = Date.now();
+    }
     const items: Dict[] = [...(live?.result?.items || []), ...(pre?.result?.items || [])];
     const keep = new Set<number>();
     const liveNew: number[] = [];
@@ -207,34 +216,55 @@ export class LuckyBetFeed implements IFeedProvider {
     const catId = Number(it.category?.id || 0);
     const tourId = Number(it.tournament?.id || 0);
 
-    let dbSport = await prisma.sport.findUnique({ where: { slug: 'football' } });
-    if (!dbSport) {
-      dbSport = await prisma.sport.create({ data: { name: 'Football', slug: 'football', iconName: 'soccer', sortOrder: 1, isActive: true } });
+    // Kalim i shpejte: nese asnje fushe e dukshme nuk ka ndryshuar, s'prekim DB fare
+    const sig = `${home}|${away}|${startAt.getTime()}|${service}`;
+    if (this.matchSig.get(dbId) === sig) return;
+
+    // Sport (1 here per proces)
+    if (!this.sportId) {
+      let dbSport = await prisma.sport.findUnique({ where: { slug: 'football' } });
+      if (!dbSport) {
+        dbSport = await prisma.sport.create({ data: { name: 'Football', slug: 'football', iconName: 'soccer', sortOrder: 1, isActive: true } });
+      }
+      this.sportId = dbSport.id;
     }
 
+    // Kategoria (cache emri -> id)
     const catName = this.catNames.get(catId) || this.prettySlug(catSlug) || 'International';
-    let dbCat = await prisma.category.findFirst({ where: { sportId: dbSport.id, name: catName } });
-    if (!dbCat) {
-      dbCat = await prisma.category.create({
-        data: { sportId: dbSport.id, name: catName, slug: `${catSlug || 'cat'}-${catId}`, sortOrder: 1 }
-      });
+    let dbCatId = this.catIds.get(catName);
+    if (!dbCatId) {
+      let dbCat = await prisma.category.findFirst({ where: { sportId: this.sportId, name: catName } });
+      if (!dbCat) {
+        dbCat = await prisma.category.create({
+          data: { sportId: this.sportId, name: catName, slug: `${catSlug || 'cat'}-${catId}`, sortOrder: 1 }
+        });
+      }
+      dbCatId = dbCat.id;
+      this.catIds.set(catName, dbCatId);
     }
 
+    // Turneu (cache catId|slug -> id)
     const tourSlug = String(it.tournament?.slug || `tournament-${tourId}`);
-    let dbTour = await prisma.tournament.findFirst({ where: { categoryId: dbCat.id, slug: tourSlug } });
-    if (!dbTour) {
-      dbTour = await prisma.tournament.create({
-        data: { categoryId: dbCat.id, name: this.prettySlug(tourSlug), slug: tourSlug, sortOrder: 1 }
-      });
+    const tourKey = `${dbCatId}|${tourSlug}`;
+    let dbTourId = this.tourIds.get(tourKey);
+    if (!dbTourId) {
+      let dbTour = await prisma.tournament.findFirst({ where: { categoryId: dbCatId, slug: tourSlug } });
+      if (!dbTour) {
+        dbTour = await prisma.tournament.create({
+          data: { categoryId: dbCatId, name: this.prettySlug(tourSlug), slug: tourSlug, sortOrder: 1 }
+        });
+      }
+      dbTourId = dbTour.id;
+      this.tourIds.set(tourKey, dbTourId);
     }
 
     const status = service === 'LIVE' ? 'LIVE' : 'PREMATCH';
-    const existing = await prisma.match.findUnique({ where: { id: dbId } });
+    const existing = await prisma.match.findUnique({ where: { id: dbId }, select: { status: true } });
     if (existing) {
       await prisma.match.update({
         where: { id: dbId },
         data: {
-          tournamentId: dbTour.id,
+          tournamentId: dbTourId,
           homeTeam: home,
           awayTeam: away,
           startTime: startAt,
@@ -245,7 +275,7 @@ export class LuckyBetFeed implements IFeedProvider {
       await prisma.match.create({
         data: {
           id: dbId,
-          tournamentId: dbTour.id,
+          tournamentId: dbTourId,
           homeTeam: home,
           awayTeam: away,
           startTime: startAt,
@@ -258,6 +288,7 @@ export class LuckyBetFeed implements IFeedProvider {
         }
       });
     }
+    this.matchSig.set(dbId, sig);
   }
 
 
