@@ -69,6 +69,7 @@ export class LuckyBetFeed implements IFeedProvider {
   private ws: WebSocket | null = null;
   private running = false;
   private cleaned = false;
+  private syncInFlight: Promise<void> | null = null;
 
   private liveIds: number[] = [];
   private catNames = new Map<number, string>();
@@ -131,7 +132,14 @@ export class LuckyBetFeed implements IFeedProvider {
 
 
   /** Merr listat LIVE + PREMATCH (vetem futboll real) dhe i sinkronizon ne DB. */
-  private async sync() {
+  /** Gardë mbivendosjeje: me DB remote sinkronizimi mund të zgjasë mbi 60s — kurrë dy njëkohësisht. */
+  private sync(): Promise<void> {
+    if (this.syncInFlight) return this.syncInFlight;
+    this.syncInFlight = this.doSync().finally(() => { this.syncInFlight = null; });
+    return this.syncInFlight;
+  }
+
+  private async doSync() {
     const [live, pre] = await Promise.all([
       api('/matches/get-many', { sportId: 18, service: 'live', limit: 2000 }),
       api('/matches/get-many', { sportId: 18, service: 'prematch', limit: 2000 })
