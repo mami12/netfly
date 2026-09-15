@@ -76,7 +76,6 @@ router.get('/matches/:id', async (req, res) => {
 });
 
 router.get('/matches/:id/tracker', async (req, res) => {
-  // Mock tracker response or could hook into SimulationFeed pitch states if we stored them globally
   res.json({
     matchId: req.params.id,
     message: "Subscribe to websocket 'tracker:' channel for real-time updates."

@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -78,6 +78,7 @@ model Match {
   awayScore    Int          @default(0)
   currentMinute Int         @default(0)
   isSuspended  Boolean      @default(false)
+  manualSuspended Boolean   @default(false) // pezullim manual nga admini (feed-i s'e ç-pezullon)
   isSimulated  Boolean      @default(true)
   createdAt    DateTime     @default(now())
   tournament   Tournament   @relation(fields: [tournamentId], references: [id])

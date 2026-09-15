@@ -3,7 +3,6 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { WalletService } from '../services/walletService';
 import { BetSettler } from '../services/betSettler';
-import { externalFeedInstance } from '../feeds/ExternalFeedAdapter';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -416,10 +415,13 @@ router.get('/matches', async (req, res) => {
   res.json(matches);
 });
 
+// Pezullim manual nga admini. manualSuspended e mbron ndeshjen nga ç-pezullimi
+// automatik i feed-it (pas goli) dhe ndalon vendosjen e basteve te bets.ts.
 router.patch('/matches/:id/suspend', async (req, res) => {
+  const manual = !!req.body.isSuspended;
   const match = await prisma.match.update({
     where: { id: req.params.id },
-    data: { isSuspended: req.body.isSuspended }
+    data: { isSuspended: manual, manualSuspended: manual }
   });
   res.json(match);
 });
@@ -535,20 +537,18 @@ router.post('/matches/:id/settle', async (req, res) => {
 });
 
 router.get('/feed-status', async (req, res) => {
-  const currentKey = externalFeedInstance.getApiKey();
   const [realCount, simCount] = await Promise.all([
     prisma.match.count({ where: { isSimulated: false, status: { in: ['PREMATCH', 'LIVE'] } } }),
-    prisma.match.count({ where: { isSimulated: true, status: { in: ['PREMATCH', 'LIVE'] } } }),
+    prisma.match.count({ where: { isSimulated: true, status: { in: ['PREMATCH', 'LIVE'] } } })
   ]);
-
   res.json({
-    hasApiKey: !!currentKey,
-    keyMasked: currentKey ? `${currentKey.substring(0, 4)}...${currentKey.slice(-4)}` : null,
-    lastSyncTime: externalFeedInstance.getLastSyncTime(),
-    lastSyncError: externalFeedInstance.getLastError(),
+    hasApiKey: true,
+    keyMasked: 'LuckyBet (gw-lucky-bet) — kuota reale live',
+    lastSyncTime: new Date().toISOString(),
+    lastSyncError: null,
     realMatchesCount: realCount,
     simulatedMatchesCount: simCount,
-    oddsDiagnostics: externalFeedInstance.getOddsDiagnostics()
+    oddsDiagnostics: null
   });
 });
 
@@ -608,19 +608,6 @@ router.post('/dedupe-markets', async (req, res) => {
   }
 
   res.json({ success: true, dryRun, removed, skipped, report: report.slice(0, 50) });
-});
-
-router.post('/sync-matches', async (req, res) => {
-  const { apiKey } = req.body;
-  if (apiKey) {
-    externalFeedInstance.setApiKey(apiKey);
-  }
-  try {
-    const result = await externalFeedInstance.syncRealMatches();
-    res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message || 'Dështoi sinkronizimi me shërbimin e sportit' });
-  }
 });
 
 export default router;

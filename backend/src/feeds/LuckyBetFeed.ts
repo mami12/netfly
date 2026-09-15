@@ -332,17 +332,20 @@ export class LuckyBetFeed implements IFeedProvider {
     const s2 = hasScore ? Math.max(r2, cur.awayScore ?? 0) : (cur.awayScore ?? 0);
     const scoreChanged = s1 !== cur.homeScore || s2 !== cur.awayScore;
 
+    // Bllokimi i golit: sahere ndryshon score → pezullo bastet (🔒 te frontend,
+    // serveri refuzon betet) deri sa te vije push-i i pare me kuota te reja (applyOdds).
     await prisma.match.update({
       where: { id: dbId },
       data: {
         homeScore: s1,
         awayScore: s2,
         currentMinute: Number.isFinite(minute) ? minute : cur.currentMinute,
-        status: ended ? 'ENDED' : 'LIVE'
+        status: ended ? 'ENDED' : 'LIVE',
+        isSuspended: scoreChanged ? true : cur.isSuspended
       }
     });
     if (scoreChanged) {
-      console.log(`[LuckyBetFeed] SCORE ${cur.homeTeam} ${s1}-${s2} ${cur.awayTeam}`);
+      console.log(`[LuckyBetFeed] GOL ${cur.homeTeam} ${s1}-${s2} ${cur.awayTeam} → kuotat pezulluar përkohësisht`);
       for (const cb of this.statusCbs) cb(dbId, 'LIVE', Number.isFinite(minute) ? minute : (cur.currentMinute ?? 0), s1, s2);
     }
     if (ended) await this.endMatch(extId);
@@ -388,6 +391,12 @@ export class LuckyBetFeed implements IFeedProvider {
           for (const cb of this.oddsCbs) cb(delta);
         }
       }
+    }
+
+    // Ç-pezullo pas ardhjes së kuotave të reja — PËRVEÇ nëse admini e ka pezulluar manualisht
+    // (manualSuspended: bllokimi i adminit mbetet derisa ai vetë ta heqë).
+    if (match.isSuspended && !match.manualSuspended) {
+      await prisma.match.update({ where: { id: dbId }, data: { isSuspended: false } });
     }
   }
 }

@@ -12,8 +12,9 @@ services:
         value: production
       - key: PORT
         value: 10000
+      # Baza Postgres (Neon): vendoset si env var DATABASE_URL në dashboardin e Render-it
       - key: DATABASE_URL
-        value: "file:./dev.db"
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: CORS_ORIGINS
