@@ -6,6 +6,7 @@ import { Match, Market } from '../../types';
 import OddsButton from './OddsButton';
 import PitchTracker from '../Tracker/PitchTracker';
 import { useLanguage } from '../../context/LanguageContext';
+import { marketLabel } from '../../utils/labels';
 
 const POLL_MS = 12000;
 const OUTCOME_LIMIT = 12;
@@ -63,8 +64,7 @@ export default function MatchDetail() {
   const visibleSections = showAllSections ? grouped : grouped.filter((s) => s.key === 'main');
   const hiddenCount = grouped.filter((s) => s.key !== 'main').reduce((a, s) => a + s.items.length, 0);
 
-  /** Emri i tregjeve: perkthimi nese ekziston, perndryshe emri origjinal i feed-it. */
-  const marketLabel = (name: string) => t('markets.' + name, name);
+  // Emrat e tregjeve vijne ne anglisht -> etiketa shqip (shih utils/labels.ts)
 
   const sortMain = (items: Market[]) =>
     [...items].sort((a, b) => {
@@ -151,7 +151,7 @@ export default function MatchDetail() {
                 return (
                   <div key={market.id} className="bg-secondary rounded-xl border border-tertiary overflow-hidden shadow-md">
                     <div className="bg-tertiary/70 px-4 py-2.5 font-bold text-sm text-white flex items-center justify-between">
-                      <span>{marketLabel(market.name)}</span>
+                      <span>{marketLabel(market.name, t)}</span>
                       <span className={`text-xs font-medium ${market.status === 'ACTIVE' ? 'text-accent-green' : 'text-amber-400'}`}>
                         {market.status === 'ACTIVE' ? 'Aktive' : 'Pezulluar'}
                       </span>
@@ -178,7 +178,7 @@ export default function MatchDetail() {
 
         {!showAllSections && hiddenCount > 0 && (
           <button
-            onClick={() => setShowAllSections(true)}
+            onClick={() => { setShowAllSections(true); setOpenSections(new Set(SECTIONS.map((s) => s.key))); }}
             className="w-full py-3 rounded-lg bg-accent-green/15 border border-accent-green/40 text-accent-green font-bold text-sm hover:bg-accent-green/25 transition"
           >
             Tregje shtesë (+{hiddenCount})

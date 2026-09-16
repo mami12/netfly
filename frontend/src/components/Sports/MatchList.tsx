@@ -122,6 +122,45 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     return { market: mk, o1, oX, o2 };
   };
 
+  /** Emri i plote i liges/kupes: "India - Bangalore Super Division" */
+  const leagueName = (m: any) => {
+    const cat = m.tournament?.category?.name;
+    const tour = m.tournament?.name;
+    if (cat && tour) return `${cat} - ${tour}`;
+    return tour || cat || 'Të tjera';
+  };
+
+  /**
+   * Grupon ndeshjet sipas ligeve/kupave: kupa indiane -> ndeshjet indiane,
+   * kupa italiane -> ato italiane, etj. Ligat me shume ndeshje dalin te parat.
+   */
+  const groupByLeague = (list: any[]) => {
+    const map = new Map<string, any[]>();
+    for (const m of list) {
+      const key = leagueName(m);
+      const arr = map.get(key);
+      if (arr) arr.push(m); else map.set(key, [m]);
+    }
+    return Array.from(map.entries())
+      .map(([name, matches]) => ({ name, matches }))
+      .sort((a, b) => b.matches.length - a.matches.length || a.name.localeCompare(b.name));
+  };
+
+  /** Ndeshjet e grupuara sipas ligeve, me krye per secilin grup. */
+  const renderGrouped = (list: any[]) => (
+    <div className="space-y-5">
+      {groupByLeague(list).map((g) => (
+        <div key={g.name} className="space-y-2.5">
+          <div className="flex items-center gap-2 border-l-2 border-accent-green pl-2">
+            <span className="text-xs font-bold text-text-primary uppercase tracking-wide truncate">{g.name}</span>
+            <span className="text-[10px] text-text-secondary font-medium shrink-0">({g.matches.length})</span>
+          </div>
+          <div className="space-y-3">{g.matches.map(renderMatchCard)}</div>
+        </div>
+      ))}
+    </div>
+  );
+
   const renderMatchCard = (m: any) => {
     const { market: market1X2, o1: outcome1, oX: outcomeX, o2: outcome2 } = pick1X2(m);
 
@@ -204,11 +243,9 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
                 <OddsButton match={m} market={market1X2} outcome={outcomeX} />
                 <OddsButton match={m} market={market1X2} outcome={outcome2} />
               </div>
-            ) : totalMarketsCount > 0 ? (
-              <div className="text-xs text-text-secondary italic px-2">—</div>
             ) : (
-              <div className="text-xs text-text-secondary italic">
-                {t('common.loading')}
+              <div className="text-xs text-text-secondary italic px-2" title="Kuotat nuk janë ende të disponueshme">
+                —
               </div>
             )}
 
@@ -321,9 +358,7 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
             <span className="text-xs text-text-secondary font-medium">({liveMatches.length})</span>
           </div>
 
-          <div className="space-y-3">
-            {liveMatches.map(renderMatchCard)}
-          </div>
+          {renderGrouped(liveMatches)}
         </div>
       )}
 
@@ -334,9 +369,7 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
             <span>{isLiveOnly ? t('sections.live_now') : t('sections.upcoming_fixtures')} ({prematchMatches.length})</span>
           </div>
 
-          <div className="space-y-3">
-            {prematchMatches.map(renderMatchCard)}
-          </div>
+          {renderGrouped(prematchMatches)}
         </div>
       )}
     </div>

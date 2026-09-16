@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useBetslip } from '../../context/BetslipContext';
 import { Match, Market, Outcome } from '../../types';
 import { useLiveOdds } from '../../api/oddsStore';
+import { outcomeLabel } from '../../utils/labels';
 
 interface Props { match: Match; market: Market; outcome: Outcome; }
 
@@ -59,7 +60,7 @@ export default function OddsButton({ match, market, outcome }: Props) {
         ${isSuspended ? 'bg-tertiary opacity-50 cursor-not-allowed border-transparent' :
           isSelected ? 'bg-primary border-accent-green text-white' : 'bg-primary border-tertiary hover:border-text-secondary text-text-primary'}`}
     >
-      <span className="text-xs truncate">{outcome.name}</span>
+      <span className="text-xs truncate">{outcomeLabel(outcome.name)}</span>
       <span className={`font-bold text-sm shrink-0 ${isSuspended ? '' : 'text-accent-yellow'}`}>
         {isSuspended ? '🔒' : currentOdds.toFixed(2)}
       </span>
