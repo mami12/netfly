@@ -43,9 +43,14 @@ Grupet "Early payout" (emri përmban score-in, p.sh. `Full time result (Early pa
 | Shërbim | Roli | Adresa |
 |---|---|---|
 | **GitHub** | Kodi burim | `https://github.com/mami12/netfly` (monorepo: `backend/` + `frontend/`) |
-| **Render** | Hosting backend + frontend | backend: `netfly-backend-1.onrender.com` (root `backend`) |
+| **Render** | Hosting **BACKEND** (Web Service, root `backend`) | `netfly-backend-1.onrender.com` |
+| **GitHub Pages** | Hosting **FRONTEND** (dega `gh-pages` e `netfly-frontend`) | `mami12.github.io/netfly-frontend` |
 | **Neon** | Baza Postgres | `ep-jolly-pine-b4zrmc2q.c-6.us-east-2.aws.neon.tech` → db `neondb` |
-| **Kredencialet JWT** | Sesionet e përdoruesve | `JWT_SECRET` (env) |
+| **JWT** | Sesionet e përdoruesve | `JWT_SECRET` (env në Render) |
+
+> **Frontend-i NUK është në Render** — është në GitHub Pages. Deploy-i i frontend-it bëhet
+> me skriptin `frontend/deploy-gh-pages.ps1` (build → push në degën `gh-pages`).
+> Backend-i në Render përditësohet vetë në çdo `git push` në `main`.
 
 **DATABASE_URL (i plotë, me parametrat e nevojshëm):**
 ```
@@ -214,16 +219,24 @@ qindra `applyOdds` njëkohësisht + ~3 pyetje DB **për çdo kuotë**.
 
 ## 9. Çfarë mbetet për të bërë (nga ana jote, në Render)
 
-### 9.1 Backend
-- Render → shërbimi i backend-it → **Settings**: Repository = `mami12/netfly`, **Root Directory = `backend`**
+### 9.1 Backend (Render) ⚠️ KA NJË GABIM TANI
+Shërbimi i backend-it ka `Root Directory` të gabuar (u vendos `frontend`), prandaj dështon me
+`Cannot find module '/opt/render/project/src/frontend/dist/index.js'`.
+**Rregullo:** Render → shërbimi i backend-it → Settings:
+- **Root Directory** = **`backend`**  ← ktheje mbrapsht!
+- **Build Command** = `npm install && npm run build && npm run db:seed`
+- **Start Command** = `npm start`
 - **Environment** → `DATABASE_URL` duhet të përmbajë `&connection_limit=10&pool_timeout=30`
-- **Manual Deploy → Deploy latest commit**
+→ Save → Manual Deploy → Deploy latest commit
 
-### 9.2 Frontend ⚠️ (arsyeja pse sheh ende `markets.Full time result`)
-Frontend-i i deploy-uar vjen nga repo-ja tjetër `mami12/netfly-frontend` — **pa ndryshimet e reja**.
-- Render → shërbimi i frontend-it → **Settings**: Repository = `mami12/netfly`, **Root Directory = `frontend`**
-- **Build Command** = `npm install && npm run build`, **Publish Directory** = `dist`
-- Ose: kopjo përmbajtjen e `frontend/` te `netfly-frontend` dhe bëj push
+### 9.2 Frontend (GitHub Pages) ✅ U BË
+Frontend-i shërbehet nga dega `gh-pages` e `netfly-frontend` (jo Render).
+U përditësua me skriptin `frontend/deploy-gh-pages.ps1`.
+
+**Për përditësime të ardhshme, vetëm:**
+```powershell
+powershell -ExecutionPolicy Bypass -File frontend\deploy-gh-pages.ps1
+```
 
 Pas kësaj, **një `git push` i vetëm përditëson të dyja** (frontend + backend).
 
