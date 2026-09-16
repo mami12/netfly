@@ -1,28 +1,37 @@
+import { useEffect, useState } from 'react';
 import { useBetslip } from '../../context/BetslipContext';
 import { Match, Market, Outcome } from '../../types';
-import { useWebSocket } from '../../api/useWebSocket';
-import { useEffect, useState } from 'react';
+import { useLiveOdds } from '../../api/oddsStore';
 
 interface Props { match: Match; market: Market; outcome: Outcome; }
 
 export default function OddsButton({ match, market, outcome }: Props) {
   const { selections, addSelection, removeSelection } = useBetslip();
-  const { oddsDeltas } = useWebSocket();
-  const [currentOdds, setCurrentOdds] = useState(outcome.odds);
+  // Kuota live nga store-i i perbashket (nje lidhje WS per te gjithe faqen, jo per buton)
+  const live = useLiveOdds(outcome.id);
   const [flashClass, setFlashClass] = useState('');
+  const [prevOdds, setPrevOdds] = useState<number | null>(null);
+
+  const currentOdds = live?.odds && live.odds > 0 ? live.odds : outcome.odds;
+
+  const isSuspended =
+    live?.status === 'SUSPENDED' ||
+    outcome.status !== 'ACTIVE' ||
+    market.status !== 'ACTIVE' ||
+    match.isSuspended;
 
   const isSelected = selections.some(s => s.outcomeId === outcome.id);
-  const isSuspended = outcome.status === 'SUSPENDED' || market.status === 'SUSPENDED' || match.isSuspended;
 
+  // Flash jeshil/kuq sahere leviz kuota
   useEffect(() => {
-    const delta = oddsDeltas[outcome.id];
-    if (delta) {
-      setCurrentOdds(delta.newOdds);
-      setFlashClass(delta.direction === 'up' ? 'animate-flash-green' : 'animate-flash-red');
+    if (prevOdds === null) { setPrevOdds(currentOdds); return; }
+    if (currentOdds !== prevOdds) {
+      setFlashClass(currentOdds > prevOdds ? 'animate-flash-green' : 'animate-flash-red');
+      setPrevOdds(currentOdds);
       const t = setTimeout(() => setFlashClass(''), 1000);
       return () => clearTimeout(t);
     }
-  }, [oddsDeltas, outcome.id]);
+  }, [currentOdds, prevOdds]);
 
   const toggle = () => {
     if (isSuspended) return;
@@ -45,12 +54,15 @@ export default function OddsButton({ match, market, outcome }: Props) {
     <button
       onClick={toggle}
       disabled={isSuspended}
-      className={`flex justify-between items-center p-3 rounded border transition-colors ${flashClass}
-        ${isSuspended ? 'bg-tertiary opacity-50 cursor-not-allowed border-transparent' : 
+      title={isSuspended ? 'Kuota është e pezulluar' : undefined}
+      className={`flex justify-between items-center gap-2 p-2.5 rounded border transition-colors ${flashClass}
+        ${isSuspended ? 'bg-tertiary opacity-50 cursor-not-allowed border-transparent' :
           isSelected ? 'bg-primary border-accent-green text-white' : 'bg-primary border-tertiary hover:border-text-secondary text-text-primary'}`}
     >
-      <span className="text-sm">{outcome.name}</span>
-      <span className="font-bold">{isSuspended ? '🔒' : currentOdds.toFixed(2)}</span>
+      <span className="text-xs truncate">{outcome.name}</span>
+      <span className={`font-bold text-sm shrink-0 ${isSuspended ? '' : 'text-accent-yellow'}`}>
+        {isSuspended ? '🔒' : currentOdds.toFixed(2)}
+      </span>
     </button>
   );
 }

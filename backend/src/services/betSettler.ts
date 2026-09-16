@@ -55,9 +55,28 @@ export class BetSettler {
 
       for (const outcome of market.outcomes) {
         const name = String(outcome.name);
+        const code = String((outcome as any).code || '').trim().toLowerCase();
         let isWinner = false;
         let voidLine = false;
 
+        // 1) Kodet e feed-it jane me te besueshme se emrat (emrat mund te jene emra ekipesh).
+        let handled = true;
+        if (code === '1' && type !== 'HANDICAP' && type !== 'ASIAN_HANDICAP') isWinner = homeWin;
+        else if (code === '2' && type !== 'HANDICAP' && type !== 'ASIAN_HANDICAP') isWinner = awayWin;
+        else if (code === 'x' || code === 'draw') isWinner = draw;
+        else if (code === '1x') isWinner = homeWin || draw;
+        else if (code === '12') isWinner = homeWin || awayWin;
+        else if (code === 'x2') isWinner = awayWin || draw;
+        else if (code === 'over' || code === 'under') {
+          const l = endsWithLine(name);
+          if (l === null) voidLine = true;
+          else isWinner = code === 'over' ? totalGoals > l : totalGoals < l;
+        } else if (code === 'yes' || code === 'no') isWinner = code === 'yes' ? bothScored : !bothScored;
+        else if (code === 'odd' || code === 'even') isWinner = code === 'odd' ? totalGoals % 2 === 1 : totalGoals % 2 === 0;
+        else handled = false;
+
+        // 2) Gjykimi nga emri (fallback kur feed-i nuk jep kod).
+        if (!handled) {
         if (type === '1X2' || type === 'MATCH_WINNER') {
           const s = side(name);
           isWinner = s === '1' ? homeWin : s === '2' ? awayWin : s === 'X' ? draw : false;
@@ -116,6 +135,8 @@ export class BetSettler {
           }
         } else {
           voidLine = true; // çdo treg tjetër pa të dhëna -> VOID
+        }
+
         }
 
         await prisma.outcome.update({

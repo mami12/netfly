@@ -73,6 +73,7 @@ export interface Outcome {
   id: string;
   marketId: string;
   name: string;
+  code?: string | null;
   odds: number;
   isWinner?: boolean;
   status: 'ACTIVE' | 'SUSPENDED' | 'SETTLED' | 'VOID';

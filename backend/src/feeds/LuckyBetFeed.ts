@@ -1,6 +1,7 @@
 ﻿import { IFeedProvider, MatchEvent, OddsDelta, PitchState } from './IFeedProvider';
 import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
+import { randomUUID } from 'crypto';
 import { BetSettler } from '../services/betSettler';
 
 const prisma = new PrismaClient();
@@ -19,6 +20,16 @@ type Dict = any;
 // Kategorite virtuale/simulimore te feed-it (cyberfifa, replays, esports...) - PA SIMULIME
 const VIRTUAL_HINTS = ['cyber', 'replay', 'esport', 'fifa', 'nba2k', 'e-soccer', 'e-football', 'virtual', 'simulated', 'shorts', 'battles'];
 const isVirtualSlug = (s: string) => VIRTUAL_HINTS.some(v => (s || '').toLowerCase().includes(v));
+
+/**
+ * Grupet "Early payout" e perseritin 1X2 (te njejtat 3 opsione) dhe emri i tyre
+ * përmban score-in live ("Full time result (Early payout 2:0)") → sahere ndryshon
+ * score-i krijohej nje treg i ri identik = dublikata ne faqe. Hiqen fare.
+ */
+const isJunkGroup = (name: string) => /early\s*payout/i.test(name || '');
+
+/** Sa milisekonda qendrojne kuotat e pezulluara pas nje goli, ne rast se feed-i nuk dergon update. */
+const SUSPEND_GRACE_MS = 25 * 1000;
 
 const STATS_HINTS = ['corner', 'card', 'shot', 'offside'];
 /** Emri i grupit nga feed-i -> marketType i brendshem (per gjykim + shfaqje). */
@@ -72,6 +83,8 @@ export class LuckyBetFeed implements IFeedProvider {
   private syncInFlight: Promise<void> | null = null;
 
   private liveIds: number[] = [];
+  private prematchIds: number[] = [];              // jo-live, sipas fillimit (me te afertat te parat)
+  private subOffset = 0;                            // dritare rrotulluese mbi prematch
   private catNames = new Map<number, string>();
   private catSlugs = new Map<number, string>();
   // Cache ne memorie: me DB remote (Neon) shmangen ~5 pyetje/ndeshje
@@ -79,6 +92,15 @@ export class LuckyBetFeed implements IFeedProvider {
   private catIds = new Map<string, number>();      // catName -> id
   private tourIds = new Map<string, number>();     // catId|tourSlug -> id
   private matchSig = new Map<string, string>();    // dbId -> "home|away|start|status"
+  private suspendedAt = new Map<string, number>(); // dbId -> kur u pezullua pas golit
+  // Radha per-ndeshje: kuotat perpunojne NJE PER NJE (pa kjo, dy mesazhe te njekoheshme
+  // krijonin tregje te dublikuara, sepse te dyja nuk e gjenin tregun ekzistues).
+  private oddsQueue = new Map<string, Promise<void>>();
+  // Kufi global: sa detyra njekohesisht prekin DB-ne. Pa te, qindra snapshot-e
+  // e mbushin pool-in e lidhjeve (limit 5) dhe te gjitha deshtojne me timeout.
+  private static readonly MAX_DB_TASKS = 3;
+  private dbActive = 0;
+  private dbWaiters: (() => void)[] = [];
   private lastNamesLoad = 0;
 
   private oddsCbs: ((delta: OddsDelta) => void)[] = [];
@@ -90,7 +112,10 @@ export class LuckyBetFeed implements IFeedProvider {
     console.log('[LuckyBetFeed] Duke nisur feed-in real te futbollit (LuckyBet / gw-lucky-bet)...');
     if (!this.cleaned) {
       this.cleaned = true;
-      this.cleanupSimulated().then(() => this.cleanupEndedOld()).catch((e) => console.error('[LuckyBetFeed] cleanup:', e));
+      this.cleanupSimulated()
+        .then(() => this.cleanupEndedOld())
+        .then(() => this.cleanupDuplicateMarkets())
+        .catch((e) => console.error('[LuckyBetFeed] cleanup:', e));
     }
     this.sync().catch((e) => console.error('[LuckyBetFeed] sync fillestar deshtoi:', e));
     this.syncTimer = setInterval(() => this.sync().catch((e) => console.error('[LuckyBetFeed] sync:', e)), 60 * 1000);
@@ -155,8 +180,13 @@ export class LuckyBetFeed implements IFeedProvider {
       this.lastNamesLoad = Date.now();
     }
     const items: Dict[] = [...(live?.result?.items || []), ...(pre?.result?.items || [])];
+
+    // 1) Mblidh ID-te MENJEHERE (pa asnje pyetje DB) — keshtu abonimi i kuotave nis
+    //    brenda sekondave, jo pasi mbaron sinkronizimi i 1700+ ndeshjeve (qe zgjat minuta).
     const keep = new Set<number>();
     const liveNew: number[] = [];
+    const preNew: { id: number; at: number }[] = [];
+    const todo: { it: Dict; catSlug: string }[] = [];
 
     for (const it of items) {
       if (Number(it.sportId) !== 18) continue;
@@ -166,12 +196,23 @@ export class LuckyBetFeed implements IFeedProvider {
       const id = Number(it.id);
       keep.add(id);
       if (String(it.service || '').toUpperCase() === 'LIVE') liveNew.push(id);
-      await this.upsertMatch(it, catSlug);
+      else preNew.push({ id, at: Number(it.startAt) || 0 });
+      todo.push({ it, catSlug });
     }
 
-    const added = liveNew.filter(x => !this.liveIds.includes(x));
     this.liveIds = liveNew;
-    if (added.length) this.subscribeNow(added);
+    // PREMATCH: me te afertat ne fillim — ato shihen me shume nga lojtaret
+    preNew.sort((a, b) => a.at - b.at);
+    this.prematchIds = preNew.map((p) => p.id);
+    if (this.subOffset >= this.prematchIds.length) this.subOffset = 0;
+
+    // Abono menjehere: kuotat fillojne te vijne pa pritur sinkronizimin e DB-se
+    this.subscribeCycle();
+
+    // 2) Sinkronizimi ne DB (i ngadalte me Neon) — kryhet tani qe abonimi ka nisur
+    for (const t of todo) {
+      await this.upsertMatch(t.it, t.catSlug);
+    }
 
     // Ndeshjet qe ra nga lista -> mbylli me score-in e fundit te njohur
     const open = await prisma.match.findMany({
@@ -183,6 +224,76 @@ export class LuckyBetFeed implements IFeedProvider {
       if (Number.isFinite(ext) && !keep.has(ext)) await this.endMatch(ext);
     }
     console.log(`[LuckyBetFeed] Sync: ${keep.size} ndeshje futbolli reale (${liveNew.length} live).`);
+
+    // Rrjetë sigurie: nëse pas një goli feed-i nuk dërgoi kuota të reja, ç-pezullo pas 25s
+    // (përveç pezullimit manual të adminit).
+    for (const [dbId, at] of Array.from(this.suspendedAt.entries())) {
+      if (Date.now() - at < SUSPEND_GRACE_MS) continue;
+      this.suspendedAt.delete(dbId);
+      await prisma.match.updateMany({
+        where: { id: dbId, isSuspended: true, manualSuspended: false },
+        data: { isSuspended: false }
+      });
+    }
+  }
+
+  /**
+   * Pastron tregjet e dublikuara (krijuar para serializimit) dhe tregjet bosh.
+   * Kontroll i lirë fillimisht; puna e rende behet vetem nese ka vertet dublikata.
+   */
+  private async cleanupDuplicateMarkets() {
+    const dupRow = await prisma.$queryRaw<{ c: number }[]>`
+      SELECT COALESCE(SUM(c - 1), 0)::int AS c FROM (
+        SELECT COUNT(*) AS c FROM "Market"
+        WHERE "matchId" LIKE 'lb-%'
+        GROUP BY "matchId", "name"
+        HAVING COUNT(*) > 1
+      ) t`;
+    const dupCount = Number(dupRow?.[0]?.c || 0);
+    if (dupCount === 0) return;
+
+    console.log(`[LuckyBetFeed] Pastrim: ${dupCount} tregje te dublikuara — po pastrohen...`);
+
+    const rows = await prisma.$queryRaw<{ id: string; matchId: string; name: string; outcomes: number }[]>`
+      SELECT m."id" AS id, m."matchId" AS matchId, m."name" AS name,
+             (SELECT COUNT(*)::int FROM "Outcome" o WHERE o."marketId" = m."id") AS outcomes
+      FROM "Market" m
+      JOIN "Match" mt ON mt."id" = m."matchId"
+      WHERE m."matchId" LIKE 'lb-%' AND mt."status" IN ('PREMATCH', 'LIVE')`;
+
+    const groups = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const key = `${r.matchId}|${r.name}`;
+      const arr = groups.get(key) || [];
+      arr.push(r);
+      groups.set(key, arr);
+    }
+
+    const doomed: string[] = [];
+    for (const arr of groups.values()) {
+      // Tregje pa asnje kuote -> hiqen
+      for (const m of arr) if (Number(m.outcomes) === 0) doomed.push(m.id);
+      // Dublikata me te njejtin emer -> mbahet ai me shume kuota
+      const withOutcomes = arr.filter((m) => Number(m.outcomes) > 0);
+      if (withOutcomes.length > 1) {
+        withOutcomes.sort((a, b) => Number(b.outcomes) - Number(a.outcomes));
+        for (const extra of withOutcomes.slice(1)) doomed.push(extra.id);
+      }
+    }
+    if (!doomed.length) return;
+
+    // Mos fshi tregjet qe kane baste te lojtareve (siguri per skedinat ekzistuese)
+    const used = await prisma.ticketLine.findMany({ where: { marketId: { in: doomed } }, select: { marketId: true } });
+    const keep = new Set(used.map((u) => u.marketId));
+    const toDelete = Array.from(new Set(doomed.filter((id) => !keep.has(id))));
+    if (!toDelete.length) return;
+
+    for (let i = 0; i < toDelete.length; i += 200) {
+      const chunk = toDelete.slice(i, i + 200);
+      await prisma.outcome.deleteMany({ where: { marketId: { in: chunk } } });
+      await prisma.market.deleteMany({ where: { id: { in: chunk } } });
+    }
+    console.log(`[LuckyBetFeed] Pastrim: u fshine ${toDelete.length} tregje te dublikuara/bosh.`);
   }
 
   /** Emrat + slug-et e kategorive (per filtrim virtual dhe shfaqje). */
@@ -302,6 +413,58 @@ export class LuckyBetFeed implements IFeedProvider {
     console.log(`[LuckyBetFeed] ENDED ${match.homeTeam} ${match.homeScore}-${match.awayScore} ${match.awayTeam}`);
   }
 
+  /**
+   * Serializon perpunimin per nje ndeshje: mesazhet e kuotave/info perpunohen
+   * NJE PER NJE. Pa kete, dy mesazhe te njekoheshme per te njejten ndeshje
+   * krijonin tregje te dublikuara (asnjera nuk e gjente tregun ekzistues).
+   */
+  private enqueue(key: unknown, task: () => Promise<void>, label: string) {
+    const k = String(key ?? 'global');
+    const prev = this.oddsQueue.get(k) || Promise.resolve();
+    const next = prev
+      .then(() => this.withDbSlot(task))
+      .catch((e) => console.error(`[LuckyBetFeed] ${label}:`, e.message));
+    this.oddsQueue.set(k, next);
+    return next;
+  }
+
+  /**
+   * Zbaton operacionet ne blloqe (nje round-trip per bllok). Nese nje bllok
+   * deshton (p.sh. konflikt unik sepse nje proces tjeter shkruan ne te njejten DB),
+   * provohen nje nga nje duke i shperfillur konfliktet — pa humbur pjesa tjeter.
+   */
+  private async flushOps(ops: (() => any)[]) {
+    for (let i = 0; i < ops.length; i += 400) {
+      const chunk = ops.slice(i, i + 400);
+      try {
+        await prisma.$transaction(chunk.map((f) => f()));
+      } catch {
+        for (const f of chunk) {
+          try { await f(); } catch { /* konflikt/garë: injoro, rregullohet cikli tjeter */ }
+        }
+      }
+    }
+  }
+
+   /**
+   * Radhe globale mbi punen me DB: nuk lejohen me shume se MAX_DB_TASKS detyra
+   * njekohesisht. Pa kete, qindra snapshot-e e mbushin pool-in e Prisma-s dhe
+   * te gjitha pyetjet deshtojne me "Timed out fetching a new connection".
+   */
+  private async withDbSlot<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.dbActive >= LuckyBetFeed.MAX_DB_TASKS) {
+      await new Promise<void>((resolve) => this.dbWaiters.push(resolve));
+    }
+    this.dbActive++;
+    try {
+      return await fn();
+    } finally {
+      this.dbActive--;
+      const next = this.dbWaiters.shift();
+      if (next) next();
+    }
+  }
+
   /** Lidhet me push-server dhe pergjigjet protokollit engine.io/socket.io. */
   private connectWs() {
     if (this.ws) return;
@@ -319,6 +482,8 @@ export class LuckyBetFeed implements IFeedProvider {
       const frame = raw.toString();
       if (frame === '2') { ws.send('3'); return; }
       if (frame.startsWith('0')) { ws.send('40'); return; }
+      // Serveri konfirmon lidhjen (40{...}) -> nis abonimin menjehere
+      if (frame.startsWith('40')) { this.subscribeCycle(); return; }
       if (!frame.startsWith('42')) return;
       let payload: any[];
       try { payload = JSON.parse(frame.slice(2)); } catch { return; }
@@ -326,9 +491,9 @@ export class LuckyBetFeed implements IFeedProvider {
       if (!msg || typeof msg.messageType !== 'string') return;
 
       if (msg.messageType === 'match-odds-snapshot' || msg.messageType === 'match-odds') {
-        this.applyOdds(msg.data || {}).catch((e) => console.error('[LuckyBetFeed] applyOdds:', e.message));
+        this.enqueue('odds', () => this.applyOdds(msg.data || {}), 'applyOdds');
       } else if (msg.messageType === 'match-info-snapshot' || msg.messageType === 'match-info') {
-        this.applyInfo(msg.data || {}).catch((e) => console.error('[LuckyBetFeed] applyInfo:', e.message));
+        this.enqueue('info', () => this.applyInfo(msg.data || {}), 'applyInfo');
       }
     });
     ws.on('close', reconnect);
@@ -338,15 +503,76 @@ export class LuckyBetFeed implements IFeedProvider {
     });
 
     // Rifresko abonimet Ã§do 30s me ID-tÃ« live aktuale
-    this.subTimer = setInterval(() => this.subscribeNow(this.liveIds), 30000);
+    this.subTimer = setInterval(() => this.subscribeCycle(), 20000);
   }
 
-  /** Abonon ID-te e dhena per kuota (te gjitha grupet) + info live. */
-  private subscribeNow(ids: number[]) {
+  /**
+   * Abonimi: LIVE me te gjitha grupet + nje dritare rrotulluese PREMATCH.
+   * Me pare abonoheshin VETEM ndeshjet live — prematch nuk merrte kurre kuota.
+   *
+   * Prematch-i ndahet ne dy nivele qe volumi i shkrimit ne DB te mbetet i menaxhueshem:
+   *   - me te afertat (NEAR) -> te gjitha grupet (faqja e detajeve e pasur)
+   *   - pjesa tjeter e dritares -> vetem grupet baze (1X2, Handicap, Total)
+   * Dritarja rrotullohet, keshtu qe me kalimin e kohes te gjitha marrin kuota.
+   */
+  private subscribeCycle() {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const live = this.liveIds;
+    const pre = this.prematchIds;
+    const liveSet = new Set(live);
+
+    const NEAR = 25;     // me te afertat: te gjitha grupet
+    const WINDOW = 90;   // dritarja prematch: grupet baze
+
+    const near: number[] = [];
+    for (let i = 0; i < Math.min(NEAR, pre.length); i++) {
+      const id = pre[i];
+      if (!liveSet.has(id)) near.push(id);
+    }
+
+    const rest: number[] = [];
+    if (pre.length) {
+      for (let i = 0; i < Math.min(WINDOW, pre.length); i++) {
+        const id = pre[(this.subOffset + i) % pre.length];
+        if (!liveSet.has(id) && !near.includes(id)) rest.push(id);
+      }
+      this.subOffset = (this.subOffset + WINDOW) % pre.length;
+    }
+
+    this.sendSub(live, false);       // live: te gjitha grupet + info
+    this.sendSub(near, false);       // prematch i afert: te gjitha grupet
+    this.sendSub(rest, true);        // pjesa tjeter: vetem grupet baze
+    if (live.length) this.sendInfo(live);
+    if (near.length) this.sendInfo(near);
+  }
+
+  /** Dergon abonimin e kuotave ne blloqe (mesazhe te medha nuk pranohen). */
+  private sendSub(ids: number[], baseOnly: boolean) {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN || !ids.length) return;
-    ws.send('42' + JSON.stringify(['subscribe', { messageType: 'subscribe-match-odds', data: { matchIds: ids, isBaseOddsGroups: false } }]));
-    ws.send('42' + JSON.stringify(['subscribe', { messageType: 'subscribe-match-info', data: { matchIds: ids } }]));
+    const CHUNK = 50;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      ws.send('42' + JSON.stringify([
+        'subscribe',
+        { messageType: 'subscribe-match-odds', data: { matchIds: chunk, isBaseOddsGroups: baseOnly } }
+      ]));
+    }
+  }
+
+  /** Abonimi i informacionit live (score, minute, status). */
+  private sendInfo(ids: number[]) {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !ids.length) return;
+    const CHUNK = 50;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      ws.send('42' + JSON.stringify([
+        'subscribe',
+        { messageType: 'subscribe-match-info', data: { matchIds: ids.slice(i, i + CHUNK) } }
+      ]));
+    }
   }
 
 
@@ -384,6 +610,7 @@ export class LuckyBetFeed implements IFeedProvider {
       }
     });
     if (scoreChanged) {
+      this.suspendedAt.set(dbId, Date.now());
       console.log(`[LuckyBetFeed] GOL ${cur.homeTeam} ${s1}-${s2} ${cur.awayTeam} → kuotat pezulluar përkohësisht`);
       for (const cb of this.statusCbs) cb(dbId, 'LIVE', Number.isFinite(minute) ? minute : (cur.currentMinute ?? 0), s1, s2);
     }
@@ -398,44 +625,107 @@ export class LuckyBetFeed implements IFeedProvider {
     if (!match || match.status === 'ENDED') return;
 
     const groups: Dict[] = (d.oddsGroups || []) as Dict[];
+    const deltas: { outcomeId: string; oldOdds: number; newOdds: number; status: string }[] = [];
+
+    // 1) Ngarko ekzistueset me NJE pyetje (jo nje pyetje per çdo outcome!)
+    const existingMarkets = await prisma.market.findMany({
+      where: { matchId: dbId },
+      include: { outcomes: { select: { id: true, name: true, odds: true, code: true, status: true } } }
+    });
+    const byExtId = new Map<string, any>(existingMarkets.filter((m) => m.extId).map((m) => [m.extId as string, m]));
+    const byName = new Map<string, any>(existingMarkets.filter((m) => !m.extId).map((m) => [m.name, m]));
+    const ops: (() => any)[] = [];
+    let marketCount = existingMarkets.length;
+
     for (const g of groups) {
-      const marketName = String(g.name || '').trim() || 'Market';
-      const marketType = marketTypeOf(marketName);
+      const rawName = String(g.name || '').trim() || 'Market';
+      if (isJunkGroup(rawName)) continue; // dublikatat "Early payout" nuk krijohen me
 
-      let market = await prisma.market.findFirst({ where: { matchId: dbId, name: marketName } });
+      const marketType = marketTypeOf(rawName);
+      const groupExtId = g.id != null ? String(g.id) : null;
+
+      // Identiteti = id e grupit te feed-it; tregjet e vjetra pa extId lidhen nje here.
+      let market: any = groupExtId ? byExtId.get(groupExtId) : undefined;
       if (!market) {
-        const cnt = await prisma.market.count({ where: { matchId: dbId } });
-        market = await prisma.market.create({
-          data: { matchId: dbId, marketType, name: marketName, status: 'ACTIVE', sortOrder: 10 + cnt }
-        });
-      } else if (market.status !== 'ACTIVE') {
-        await prisma.market.update({ where: { id: market.id }, data: { status: 'ACTIVE' } });
-      }
-
-      for (const o of (g.oddsList || []) as Dict[]) {
-        const cf = Number(o.cf);
-        if (!Number.isFinite(cf) || cf <= 0) continue; // kuote e fshir/e pezulluar
-        const odds = Math.max(1.01, Math.round(cf * 100) / 100);
-        const outName = String(o.name || o.outcome || '').trim();
-        if (!outName) continue;
-
-        const outcome = await prisma.outcome.findFirst({ where: { marketId: market.id, name: outName } });
-        if (!outcome) {
-          await prisma.outcome.create({ data: { marketId: market.id, name: outName, odds, status: 'ACTIVE' } });
-        } else if (outcome.status !== 'ACTIVE') {
-          await prisma.outcome.update({ where: { id: outcome.id }, data: { status: 'ACTIVE', odds } });
-        } else if (outcome.odds !== odds) {
-          await prisma.outcome.update({ where: { id: outcome.id }, data: { odds } });
-          const delta: OddsDelta = { matchId: dbId, outcomes: [{ outcomeId: outcome.id, oldOdds: outcome.odds, newOdds: odds }] };
-          for (const cb of this.oddsCbs) cb(delta);
+        const legacy = byName.get(rawName);
+        if (legacy) {
+          market = legacy;
+          if (groupExtId) {
+            ops.push(() => prisma.market.update({ where: { id: legacy.id }, data: { extId: groupExtId } }));
+            byExtId.set(groupExtId, legacy);
+            byName.delete(rawName);
+          }
         }
       }
+      if (!market) {
+        const id = randomUUID();
+        ops.push(() => prisma.market.create({
+          data: { id, matchId: dbId, extId: groupExtId, marketType, name: rawName, status: 'ACTIVE', sortOrder: 10 + marketCount }
+        }));
+        marketCount++;
+        market = { id, matchId: dbId, extId: groupExtId, name: rawName, marketType, status: 'ACTIVE', outcomes: [] };
+        if (groupExtId) byExtId.set(groupExtId, market);
+      } else if (market.status !== 'ACTIVE') {
+        ops.push(() => prisma.market.update({ where: { id: market.id }, data: { status: 'ACTIVE' } }));
+      }
+
+      // Outcome-et ekzistuese te ketij tregu (in-memory — pa pyetje shtese DB)
+      const known: Map<string, any> = new Map((market.outcomes || []).map((o: any) => [o.name, o]));
+
+      for (const o of (g.oddsList || []) as Dict[]) {
+        const outName = String(o.name || o.outcome || '').trim();
+        if (!outName) continue;
+        const code = String(o.outcome ?? '').trim();
+
+        // cf <= 0 = kuote e hequr/pezulluar nga burimi → SUSPENDED (e dukshme + e bllokuar)
+        const cf = Number(o.cf);
+        const hasOdds = Number.isFinite(cf) && cf > 0;
+        const odds = hasOdds ? Math.max(1.01, Math.round(cf * 100) / 100) : 0;
+
+        const outcome = known.get(outName);
+        if (!outcome) {
+          if (!hasOdds) continue; // mos krijo outcome pa kuote
+          const id = randomUUID();
+          ops.push(() => prisma.outcome.create({ data: { id, marketId: market.id, name: outName, code: code || null, odds, status: 'ACTIVE' } }));
+          known.set(outName, { id, name: outName, odds, code: code || null, status: 'ACTIVE' });
+        } else if (!hasOdds) {
+          if (outcome.status !== 'SUSPENDED') {
+            ops.push(() => prisma.outcome.update({ where: { id: outcome.id }, data: { status: 'SUSPENDED' } }));
+            deltas.push({ outcomeId: outcome.id, oldOdds: outcome.odds, newOdds: outcome.odds, status: 'SUSPENDED' });
+            outcome.status = 'SUSPENDED';
+          }
+        } else if (outcome.status !== 'ACTIVE') {
+          ops.push(() => prisma.outcome.update({ where: { id: outcome.id }, data: { status: 'ACTIVE', odds, ...(code && !outcome.code ? { code } : {}) } }));
+          deltas.push({ outcomeId: outcome.id, oldOdds: outcome.odds, newOdds: odds, status: 'ACTIVE' });
+          outcome.status = 'ACTIVE';
+          outcome.odds = odds;
+          if (code) outcome.code = code;
+        } else if (outcome.odds !== odds || (!outcome.code && code)) {
+          // Rifresko kuoten DHE ploteso kodin nese mungon (backfill i rreshtave te vjeter)
+          ops.push(() => prisma.outcome.update({ where: { id: outcome.id }, data: { odds, ...(code && !outcome.code ? { code } : {}) } }));
+          if (outcome.odds !== odds) {
+            deltas.push({ outcomeId: outcome.id, oldOdds: outcome.odds, newOdds: odds, status: 'ACTIVE' });
+          }
+          outcome.odds = odds;
+          if (code) outcome.code = code;
+        }
+      }
+    }
+
+    // 2) Zbato te gjitha ndryshimet ne blloqe: nje round-trip ne vend te nje pyetjeje per kuote
+    await this.flushOps(ops);
+
+    // Nje mesazh i vetem per te gjitha kuotat e ndryshuara (me pak trafik WS).
+    if (deltas.length) {
+      const delta = { matchId: dbId, outcomes: deltas } as OddsDelta;
+      for (const cb of this.oddsCbs) cb(delta);
     }
 
     // Ç-pezullo pas ardhjes së kuotave të reja — PËRVEÇ nëse admini e ka pezulluar manualisht
     // (manualSuspended: bllokimi i adminit mbetet derisa ai vetë ta heqë).
     if (match.isSuspended && !match.manualSuspended) {
       await prisma.match.update({ where: { id: dbId }, data: { isSuspended: false } });
+      this.suspendedAt.delete(dbId);
     }
   }
 }

@@ -103,14 +103,30 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     );
   }
 
-  const renderMatchCard = (m: any) => {
-    // Find 1X2 market
-    const market1X2 = m.markets?.find((mk: any) => mk.marketType === '1X2' || mk.name === '1X2' || mk.name.includes('Winner'));
-    const outcome1 = market1X2?.outcomes?.find((o: any) => o.name === '1');
-    const outcomeX = market1X2?.outcomes?.find((o: any) => o.name === 'X');
-    const outcome2 = market1X2?.outcomes?.find((o: any) => o.name === '2');
+  /**
+   * Gjen kuotat 1/X/2. Fillimisht nga `code` i feed-it (1, x, 2), pastaj nga emri
+   * (ekipi vendas / Draw / ekipi mysafir) — feed-i i jep emrat e ekipeve, jo "1"/"X"/"2".
+   */
+  const pick1X2 = (m: any) => {
+    const markets: any[] = (m.markets || []).filter((x: any) => !/early\s*payout/i.test(x.name || ''));
+    const mk = markets.find((x: any) =>
+      x.marketType === '1X2' || x.name === '1X2' || /full\s*time\s*result|match\s*winner|^result$/i.test(x.name || '')
+    );
+    if (!mk) return { market: null, o1: null, oX: null, o2: null };
+    const outs: any[] = mk.outcomes || [];
+    const byCode = (c: string) => outs.find((o: any) => String(o.code || '').toLowerCase() === c);
+    const byName = (re: RegExp) => outs.find((o: any) => re.test(String(o.name || '').trim()));
+    const o1 = byCode('1') || byName(/^1$/) || outs.find((o: any) => o.name === m.homeTeam);
+    const oX = byCode('x') || byName(/^(x|draw)$/i);
+    const o2 = byCode('2') || byName(/^2$/) || outs.find((o: any) => o.name === m.awayTeam);
+    return { market: mk, o1, oX, o2 };
+  };
 
-    const totalMarketsCount = m.markets?.length || 0;
+  const renderMatchCard = (m: any) => {
+    const { market: market1X2, o1: outcome1, oX: outcomeX, o2: outcome2 } = pick1X2(m);
+
+    // Tregjet dublikate (Early payout) nuk numërohen
+    const totalMarketsCount = (m.markets || []).filter((mk: any) => !/early\s*payout/i.test(mk.name || '')).length;
 
     return (
       <div 
@@ -129,6 +145,11 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
             {!m.isSimulated && (
               <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] px-1.5 py-0.5 rounded font-black tracking-wide">
                 REALE
+              </span>
+            )}
+            {m.isSuspended && (
+              <span className="bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] px-1.5 py-0.5 rounded font-black tracking-wide">
+                 PEZULLUAR
               </span>
             )}
             {m.status === 'LIVE' ? (
@@ -183,6 +204,8 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
                 <OddsButton match={m} market={market1X2} outcome={outcomeX} />
                 <OddsButton match={m} market={market1X2} outcome={outcome2} />
               </div>
+            ) : totalMarketsCount > 0 ? (
+              <div className="text-xs text-text-secondary italic px-2">—</div>
             ) : (
               <div className="text-xs text-text-secondary italic">
                 {t('common.loading')}

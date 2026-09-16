@@ -89,6 +89,7 @@ model Match {
 model Market {
   id         String       @id @default(uuid())
   matchId    String
+  extId      String? // id e grupit te kuotave nga feed-i (identitet i sakte)
   marketType String // 1X2, OVER_UNDER, BOTH_TEAMS_SCORE, DOUBLE_CHANCE
   name       String
   specifier  String?
@@ -97,17 +98,22 @@ model Market {
   match      Match        @relation(fields: [matchId], references: [id])
   outcomes   Outcome[]
   ticketLines TicketLine[]
+
+  @@unique([matchId, name]) // nje treg i vetem per emer brenda ndeshjes — dublikatat e pamundura
 }
 
 model Outcome {
   id         String       @id @default(uuid())
   marketId   String
   name       String
+  code       String? // kodi i feed-it: 1, x, 2, over, under, yes, no, odd, even...
   odds       Float
   isWinner   Boolean?
   status     String // ACTIVE, SUSPENDED, SETTLED, VOID
   market     Market       @relation(fields: [marketId], references: [id])
   ticketLines TicketLine[]
+
+  @@unique([marketId, name]) // nje kuote e vetme per emer brenda tregut
 }
 
 model Ticket {

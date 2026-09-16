@@ -11,7 +11,7 @@ const dicts: Record<Lang, any> = { al, en, de, fr };
 interface LanguageContextType {
   lang: Lang;
   setLanguage: (l: Lang) => void;
-  t: (key: string) => string;
+  t: (key: string, fallback?: string) => string;
 }
 
 const LanguageContext = createContext<LanguageContextType>({} as LanguageContextType);
@@ -26,7 +26,7 @@ export const LanguageProvider = ({ children }: { children: React.ReactNode }) =>
     localStorage.setItem('lang', lang);
   }, [lang]);
 
-  const t = (key: string) => {
+  const t = (key: string, fallback?: string) => {
     const keys = key.split('.');
     let val: any = dicts[lang];
     for (const k of keys) {
@@ -36,11 +36,15 @@ export const LanguageProvider = ({ children }: { children: React.ReactNode }) =>
     if (val && typeof val === 'string') return val;
 
     // Fallback to Albanian if key missing in selected language
-    let fallback: any = dicts.al;
+    let fb: any = dicts.al;
     for (const k of keys) {
-      if (!fallback) break;
-      fallback = fallback[k];
+      if (!fb) break;
+      fb = fb[k];
     }
+    if (fb && typeof fb === 'string') return fb;
+
+    // Ne fund: fallback-i i dhene nga therritesi (p.sh. emri origjinal i tregut nga feed-i),
+    // qe te mos shfaqen kurre çelesa te papërkthyer si "markets.xyz".
     return fallback && typeof fallback === 'string' ? fallback : key;
   };
 

@@ -18,7 +18,7 @@ export interface PitchState {
 
 export interface OddsDelta {
   matchId: string;
-  outcomes: { outcomeId: string; oldOdds: number; newOdds: number; }[];
+  outcomes: { outcomeId: string; oldOdds: number; newOdds: number; status?: string; }[];
 }
 
 export interface IFeedProvider {
