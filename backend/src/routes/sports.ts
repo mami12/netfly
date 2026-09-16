@@ -42,9 +42,11 @@ router.get('/matches', async (req, res) => {
     include: {
       tournament: { include: { category: { include: { sport: true } } } },
       markets: {
+        where: { marketType: '1X2' }, // lista: vetem tregu kryesor (pergjigje e lehte)
         include: { outcomes: true },
         orderBy: { sortOrder: 'asc' }
-      }
+      },
+      _count: { select: { markets: true } } // numri total per butonin "+N"
     },
     orderBy: [
       { isSimulated: 'asc' },
