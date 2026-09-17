@@ -216,7 +216,48 @@ skriptin që abonohet për ndeshjet tona dhe krahason.
 shfaqeshin si reale. U shtua hint-i `short` + `cleanupVirtualMatches()` që i fshin
 (kategoria 969 = short-football, 989 = cyberfifa, 1940 = replays, 2038 = ereplays).
 
-### 6.8 Pastrime të tjera
+### 6.11 Minutat mbeteshin "0'" + ndeshje të pafilluara shfaqeshin si LIVE
+Feed-i i liston si `service: "LIVE"` edhe ndeshjet që **nuk kanë filluar**
+(`status: "About to start"` / `"Not started yet"`) → ne i shënonim **LIVE** dhe ato
+shfaqeshin në "NDESHJET LIVE" me **0'**, ndërsa ndeshjet e vërteta live kishin
+`matchTime` që shpesh mungonte → mbeteshin në 0'.
+**Zgjidhja:**
+- `notStarted` (regex `about to start|not started|scheduled|postpon|delay|cancel`) → statusi **PREMATCH**, jo LIVE
+  (ato shfaqen te "Ndeshjet e ardhshme" me orën e nisjes)
+- **Fallback** për minutat: nëse `matchTime` mungon/0 → llogaritet nga `startTime`
+  (`Math.min(90, minutat e kaluara)`)
+- U shtua fusha **`period`** (statusi i feed-it: "1st Half"/"Break Time"/"2nd Half")
+  → shfaqet në shqip: **Pjesa 1 / Pushim / Pjesa 2 / Nis së shpejti / Përfundoi**
+
+Rezultati: **Live 39 → 14, me minutë 0 → 0**; minutat reale 91' / 85' / 66' / 69'.
+
+### 6.12 Dublikatat në UI: "i njëjti opsion 2 herë"
+Seksionet e tregjeve në `MatchDetail` **nuk ishin ekskluzive**: secili treg shfaqej në
+seksionin e vet **dhe** në "Të tjera" (që kishte `match: () => true` dhe i kapte të gjitha).
+P.sh. "Të Dyja Ekipet Shënojnë" dukej 2 herë. **Zgjidhja:** grupim me shënim `used` —
+çdo treg shfaqet vetëm në **seksionin e parë** që përputhet.
+
+### 6.13 Statistikat live (kornera / kartona)
+`sportTag: "football"` **nuk** i dallon lojërat virtuale — dallimi bëhet vetëm me `categoryId`
+(969/989/1940/2038). U shtuan:
+- **`extHomeId` / `extAwayId`** (id-të e ekipeve nga feed-i) — `scoreBoard.results` është i
+  keyed nga id-ja e ekipit, jo nga pozicioni
+- **`homeCorners`/`awayCorners`/`homeYellow`/`awayYellow`/`homeRed`/`awayRed`** →
+  shfaqen në faqen e detajeve: 🚩 Kornera ·  Kartonë · 🟥 Të kuq
+
+### 6.14 Tregjet pa emër u hoqën
+402 tregje kishin emrin **"Market"** (grup pa emër nga feed-i). Tani nuk krijohen më
+(`if (!rawName) continue`) dhe mbetjet u fshinë me `cleanupUnnamedMarkets()`.
+
+### 6.15 Ora e nisjes në shqip + përkthime të plota
+- `formatKickoff()`: **"Sot, 20:45"** · **"Nesër, 18:00"** · **"17 Sht, 20:45"**
+- ~35 përkthime të reja tregjesh + modele për emrat dinamikë
+  (`Result and both teams to score` → `Rezultati & Të dyja shënojnë`,
+   `Winning margin X by 2 goals` → `Diferenca — X me 2 gola`,
+   `From 1 to 15 minute inclusive. Goal to be scored` → `Nga minuta 1-15 — Gol`,
+   `X Asian total` → `X — total aziatik`)
+
+### 6.16 Pastrime të tjera
 - `SimulationFeed` u hoq fare; `seed.ts` krijon vetëm admin + menaxher
 - `ExternalFeedAdapter` (Bzzoiro) dhe çelësat e vjetër API u hoqën
 - 8 skedarë bosh mbeturinash (nga redirect i log-ut të Render) u fshinë nga repo
