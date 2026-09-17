@@ -18,7 +18,7 @@ const HTTP_HEADERS = {
 type Dict = any;
 
 // Kategorite virtuale/simulimore te feed-it (cyberfifa, replays, esports...) - PA SIMULIME
-const VIRTUAL_HINTS = ['cyber', 'replay', 'esport', 'fifa', 'nba2k', 'e-soccer', 'e-football', 'virtual', 'simulated', 'shorts', 'battles'];
+const VIRTUAL_HINTS = ['cyber', 'replay', 'esport', 'fifa', 'nba2k', 'e-soccer', 'e-football', 'virtual', 'simulated', 'short', 'battles'];
 const isVirtualSlug = (s: string) => VIRTUAL_HINTS.some(v => (s || '').toLowerCase().includes(v));
 
 /**
@@ -93,6 +93,10 @@ export class LuckyBetFeed implements IFeedProvider {
   private tourIds = new Map<string, number>();     // catId|tourSlug -> id
   private matchSig = new Map<string, string>();    // dbId -> "home|away|start|status"
   private suspendedAt = new Map<string, number>(); // dbId -> kur u pezullua pas golit
+  // dbId -> "ts" i mesazhit te fundit te aplikuar. Feed-i dergon nje timestamp (ms)
+  // ne çdo match-info: mesazhet me ts me te vjeter hidhen poshtë (renditje e sakte),
+  // keshtu korrigjimet e score-it (p.sh. gol i anuluar 0-1 -> 0-0) pranohen.
+  private infoTs = new Map<string, number>();
   // Radha per-ndeshje: kuotat perpunojne NJE PER NJE (pa kjo, dy mesazhe te njekoheshme
   // krijonin tregje te dublikuara, sepse te dyja nuk e gjenin tregun ekzistues).
   private oddsQueue = new Map<string, Promise<void>>();
@@ -115,6 +119,7 @@ export class LuckyBetFeed implements IFeedProvider {
       this.cleanupSimulated()
         .then(() => this.cleanupEndedOld())
         .then(() => this.cleanupDuplicateMarkets())
+        .then(() => this.cleanupVirtualMatches())
         .catch((e) => console.error('[LuckyBetFeed] cleanup:', e));
     }
     this.sync().catch((e) => console.error('[LuckyBetFeed] sync fillestar deshtoi:', e));
@@ -294,6 +299,32 @@ export class LuckyBetFeed implements IFeedProvider {
       await prisma.market.deleteMany({ where: { id: { in: chunk } } });
     }
     console.log(`[LuckyBetFeed] Pastrim: u fshine ${toDelete.length} tregje te dublikuara/bosh.`);
+  }
+
+  /**
+   * Fshin ndeshjet qe i perkasin kategorive virtuale (short-football, cyberfifa,
+   * replays...) — keto kishin kaluar filtrin e vjeter dhe shfaqeshin si ndeshje
+   * reale me score te gabuar. Ndeshjet me baste te lojtareve nuk preken.
+   */
+  private async cleanupVirtualMatches() {
+    const cats = await prisma.category.findMany({ select: { id: true, slug: true } });
+    const badCatIds = cats.filter((c) => isVirtualSlug(c.slug)).map((c) => c.id);
+    if (!badCatIds.length) return;
+
+    const tours = await prisma.tournament.findMany({ where: { categoryId: { in: badCatIds } }, select: { id: true } });
+    if (!tours.length) return;
+
+    const found = await prisma.match.findMany({
+      where: { tournamentId: { in: tours.map((t) => t.id) }, id: { startsWith: 'lb-' } },
+      select: { id: true, _count: { select: { ticketLines: true } } }
+    });
+    const ids = found.filter((m) => m._count.ticketLines === 0).map((m) => m.id);
+    if (!ids.length) return;
+
+    await prisma.outcome.deleteMany({ where: { market: { matchId: { in: ids } } } });
+    await prisma.market.deleteMany({ where: { matchId: { in: ids } } });
+    await prisma.match.deleteMany({ where: { id: { in: ids } } });
+    console.log(`[LuckyBetFeed] U fshine ${ids.length} ndeshje virtuale (short-football/replays/cyberfifa).`);
   }
 
   /** Emrat + slug-et e kategorive (per filtrim virtual dhe shfaqje). */
@@ -579,6 +610,13 @@ export class LuckyBetFeed implements IFeedProvider {
   private async applyInfo(d: Dict) {
     const extId = Number(d.matchId);
     const dbId = `lb-${extId}`;
+
+    // Renditja: feed-i dergon "ts" (ms) ne çdo match-info. Nje mesazh me ts me te
+    // vjeter se i fundit i aplikuar = ardhje jashte radhe -> hidhet poshte.
+    const ts = Number(d.ts || 0);
+    const lastTs = this.infoTs.get(dbId) ?? 0;
+    if (ts > 0 && lastTs > 0 && ts < lastTs) return;
+
     const ms = (d.matchScore || d.score || {}) as Dict;
     const st = String(d.status || '');
     const r1 = Number(ms.t1 ?? ms.home);
@@ -593,8 +631,11 @@ export class LuckyBetFeed implements IFeedProvider {
     const ended = st === 'Ended' || st === 'ENDED' || st === 'finished';
 
     // Golat nuk zvogëlohen: snapshot-et stale (p.sh. 0-0 pas 2-1) hidhen poshtë.
-    const s1 = hasScore ? Math.max(r1, cur.homeScore ?? 0) : (cur.homeScore ?? 0);
-    const s2 = hasScore ? Math.max(r2, cur.awayScore ?? 0) : (cur.awayScore ?? 0);
+    // Score-i merret ASHTU SI ESHTE: feed-i eshte burimi i se vertetes. NUK perdoret
+    // Math.max (qe e bllokonte uijen e score-it) — keshtu pranohen korrigjimet:
+    // gol i anuluar (0-1 -> 0-0), ose push i gabuar i korrigjuar nga feed-i.
+    const s1 = hasScore ? r1 : (cur.homeScore ?? 0);
+    const s2 = hasScore ? r2 : (cur.awayScore ?? 0);
     const scoreChanged = s1 !== cur.homeScore || s2 !== cur.awayScore;
 
     // Bllokimi i golit: sahere ndryshon score → pezullo bastet (🔒 te frontend,
@@ -609,6 +650,8 @@ export class LuckyBetFeed implements IFeedProvider {
         isSuspended: scoreChanged ? true : cur.isSuspended
       }
     });
+    // Ruaj "ts" e fundit te aplikuar — baza e renditjes per mesazhet e ardhshme
+    if (ts > 0) this.infoTs.set(dbId, ts);
     if (scoreChanged) {
       this.suspendedAt.set(dbId, Date.now());
       console.log(`[LuckyBetFeed] GOL ${cur.homeTeam} ${s1}-${s2} ${cur.awayTeam} → kuotat pezulluar përkohësisht`);

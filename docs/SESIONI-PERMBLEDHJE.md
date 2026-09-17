@@ -183,6 +183,39 @@ qindra `applyOdds` njëkohësisht + ~3 pyetje DB **për çdo kuotë**.
   1X2 gjithmonë i pari, "Tregje shtesë" i hap të gjitha, kufi 12 kuota për treg
 - `MatchList`: ndeshjet **të grupuara sipas ligave/kupave** (kupa indiane → ndeshjet indiane, etj.)
 
+### 6.9 Score-i i gabuar: mysafiri +1 gol (0-1 në vend të 0-0) 
+Feed-i jep score-in vetëm në WebSocket (`match-info`), jo në REST. Fushat e sakta:
+```json
+"matchScore":   { "t1": "2", "t2": "0" },        // STRINGS, jo numra
+"periodsScore": [ {"t1":"1","t2":"0"}, ... ],     // për pjesë
+"ts": 1789643981835,                              // timestamp (ms)
+"matchTime": 3570000                              // ms → 59.5 min
+```
+
+**Shkaku:** kodi kishte një "mbrojtje" që e bllokonte score-in të ulej:
+```ts
+const s1 = hasScore ? Math.max(r1, cur.homeScore ?? 0) : (cur.homeScore ?? 0);
+const s2 = hasScore ? Math.max(r2, cur.awayScore ?? 0) : (cur.awayScore ?? 0);
+```
+Kur feed-i **korrigjonte** score-in (gol i anuluar/VAR, ose push i gabuar 0-1 që pastaj
+korrigjohej në 0-0), ne e mbanim **përgjithmonë** vlerën e lartë — ndërsa kuotat
+vazhdonin të përditësoheshin sipas score-it të saktë. Rezultat: faqja tregonte 0-1
+me kuota që i përgjigjeshin 0-0.
+
+**Zgjidhja:** score-i merret **ashtu si është** (feed-i është burimi i së vërtetës), dhe
+renditja bëhet me **`ts`**: mbahet `Map<matchId, ts>` dhe një mesazh me `ts` më të vjetër
+se i fundit i aplikuar **hidhet poshtë** (mbron nga ardhja jashtë radhe, por pranon
+korrigjimet me `ts` më të ri). 
+
+**Prova:** 16 nga 16 ndeshje live → score **identik** me feed-in (0 diferenca), e matur me
+skriptin që abonohet për ndeshjet tona dhe krahason.
+
+### 6.10 Kategoria `short-football` po kalonte filtrin e virtuale
+`VIRTUAL_HINTS` kishte `'shorts'` (shumës), ndërsa slug-u i kategorisë 969 është
+**`short-football`** → 39 ndeshje "Short football" (të simuluara, me score 4-8) po
+shfaqeshin si reale. U shtua hint-i `short` + `cleanupVirtualMatches()` që i fshin
+(kategoria 969 = short-football, 989 = cyberfifa, 1940 = replays, 2038 = ereplays).
+
 ### 6.8 Pastrime të tjera
 - `SimulationFeed` u hoq fare; `seed.ts` krijon vetëm admin + menaxher
 - `ExternalFeedAdapter` (Bzzoiro) dhe çelësat e vjetër API u hoqën
