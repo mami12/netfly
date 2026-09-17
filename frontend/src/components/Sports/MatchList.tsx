@@ -3,6 +3,7 @@ import { apiClient } from '../../api/client';
 import { useLanguage } from '../../context/LanguageContext';
 import { Match } from '../../types';
 import OddsButton from './OddsButton';
+import { minuteLabel, formatKickoff } from '../../utils/labels';
 import { useNavigate } from 'react-router-dom';
 import { Radio, ChevronRight, Clock, Shield, Search, CalendarDays } from 'lucide-react';
 
@@ -192,14 +193,14 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
               </span>
             )}
             {m.status === 'LIVE' ? (
-              <span className="inline-flex items-center gap-1 bg-accent-red text-white text-[10px] font-black px-2 py-0.5 rounded-full animate-pulse">
+              <span className="inline-flex items-center gap-1 bg-accent-red text-white text-[10px] font-black px-2 py-0.5 rounded-full">
                 <Radio size={10} />
-                LIVE {m.currentMinute || 0}'
+                LIVE · {minuteLabel(m)}
               </span>
             ) : (
               <span className="text-text-secondary flex items-center gap-1">
                 <Clock size={12} />
-                {new Date(m.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} &bull; {new Date(m.startTime).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                {formatKickoff(m.startTime)}
               </span>
             )}
           </div>

@@ -42,10 +42,68 @@ export function marketLabel(name: string, t: TFunc): string {
   if ((m = p(/^(.+?)\. Handicap$/i))) return `${m[1]} — Handikap`;
   if ((m = p(/^(.+?)\. Odd\/Even$/i))) return `${m[1]} — Çift/Tek`;
 
+  if ((m = p(/^From (\d+) to (\d+) minute inclusive\. (.+)$/i))) return `Nga minuta ${m[1]}-${m[2]} — ${marketLabel(m[3], t)}`;
+  if ((m = p(/^(.+?) to score the goal.*$/i))) return `${m[1]} — shënon golin`;
+  if ((m = p(/^(.+?) to win either half$/i))) return `${m[1]} — fitore në një pjesë`;
+  if ((m = p(/^(.+?) to win both halves$/i))) return `${m[1]} — fitore në të dyja pjesët`;
+  if ((m = p(/^(.+?) to score in both halves$/i))) return `${m[1]} — shënon në të dyja pjesët`;
+  if ((m = p(/^(.+?) to win to nil$/i))) return `${m[1]} — fitore pa gol`;
+  if ((m = p(/^(.+?) Asian total$/i))) return `${m[1]} — total aziatik`;
+  if ((m = p(/^Winning margin (.+?) by (\d+) goal or draw$/i))) return `Diferenca — ${m[1]} me ${m[2]} gol ose barazim`;
+  if ((m = p(/^Winning margin (.+?) by (\d+) goals?$/i))) return `Diferenca — ${m[1]} me ${m[2]} gola`;
+
   return name; // emri origjinal (i kuptueshëm) — pa çelësa të papërkthyer
 }
 
-/** Përkthimi i emrit të një opsioni kuote (Over 2.5 -> Mbi 2.5, Draw -> Barazim...). */
+/** Emri origjinal i tregut nga feed-i -> "Market" (grup pa emer) filtrohet. */
+export const isUnnamedMarket = (name: string) => !String(name || '').trim() || /^market$/i.test(String(name).trim());
+
+/** Statusi i feed-it -> etiketë shqip (Pjesa 1 / Pushim / Pjesa 2...). */
+export function periodLabel(status: string): string {
+  const p = String(status || '').toLowerCase();
+  if (!p) return '';
+  if (p.includes('1st half') || p === 'h1') return 'Pjesa 1';
+  if (p.includes('2nd half') || p === 'h2') return 'Pjesa 2';
+  if (p.includes('break') || p.includes('half-time') || p.includes('halftime') || p === 'ht') return 'Pushim';
+  if (p.includes('extra time') || p.includes('overtime')) return 'Shtesë';
+  if (p.includes('penalt')) return 'Penallti';
+  if (p.includes('about to start') || p.includes('not started') || p.includes('scheduled')) return 'Nis së shpejti';
+  if (p.includes('postpon')) return 'Shtyrë';
+  if (p.includes('cancel')) return 'Anuluar';
+  if (p.includes('end') || p.includes('finish')) return 'Përfundoi';
+  return status;
+}
+
+/** Etiketa e minutës për ndeshje live: "67'", "Pushim", "Nis së shpejti"... */
+export function minuteLabel(m: { currentMinute?: number; period?: string | null }): string {
+  const p = String(m?.period || '').toLowerCase();
+  if (p) {
+    const special = periodLabel(p);
+    if (special !== p) return special; // Pushim / Përfundoi / Nis së shpejti / Shtesë...
+  }
+  return `${Number(m?.currentMinute || 0)}'`;
+}
+
+/** Ora e nisjes në shqip: "Sot, 20:45" · "Nesër, 18:00" · "17 Sht, 20:45". */
+export function formatKickoff(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const diff = Math.round((day - today) / 86400000);
+
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const hhmm = `${hh}:${mm}`;
+
+  if (diff === 0) return `Sot, ${hhmm}`;
+  if (diff === 1) return `Nesër, ${hhmm}`;
+  if (diff === -1) return `Dje, ${hhmm}`;
+
+  const muaj = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Korr', 'Gus', 'Sht', 'Okt', 'Nën', 'Dhj'];
+  return `${d.getDate()} ${muaj[d.getMonth()]}, ${hhmm}`;
+}
 export function outcomeLabel(name: string): string {
   if (!name) return '';
   const n = String(name).trim();

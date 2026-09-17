@@ -77,6 +77,15 @@ model Match {
   homeScore    Int          @default(0)
   awayScore    Int          @default(0)
   currentMinute Int         @default(0)
+  period       String? // statusi i feed-it: "1st Half", "Break Time", "2nd Half"...
+  extHomeId    Int? // id e ekipit vendas ne feed (per statistikat)
+  extAwayId    Int? // id e ekipit mysafir ne feed
+  homeCorners  Int          @default(0)
+  awayCorners  Int          @default(0)
+  homeYellow   Int          @default(0)
+  awayYellow   Int          @default(0)
+  homeRed      Int          @default(0)
+  awayRed      Int          @default(0)
   isSuspended  Boolean      @default(false)
   manualSuspended Boolean   @default(false) // pezullim manual nga admini (feed-i s'e ç-pezullon)
   isSimulated  Boolean      @default(true)

@@ -54,6 +54,13 @@ export interface Match {
   currentMinute?: number;
   isSuspended: boolean;
   isSimulated?: boolean;
+  period?: string | null;
+  homeCorners?: number;
+  awayCorners?: number;
+  homeYellow?: number;
+  awayYellow?: number;
+  homeRed?: number;
+  awayRed?: number;
   tournament?: Tournament & { category?: Category & { sport?: Sport } };
   markets?: Market[];
 }

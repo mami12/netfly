@@ -6,7 +6,7 @@ import { Match, Market } from '../../types';
 import OddsButton from './OddsButton';
 import PitchTracker from '../Tracker/PitchTracker';
 import { useLanguage } from '../../context/LanguageContext';
-import { marketLabel } from '../../utils/labels';
+import { marketLabel, minuteLabel, periodLabel, formatKickoff, isUnnamedMarket } from '../../utils/labels';
 
 const POLL_MS = 12000;
 const OUTCOME_LIMIT = 12;
@@ -44,7 +44,7 @@ export default function MatchDetail() {
         if (!alive) return;
         setMatch(res.data);
         const ms: Market[] = (res.data?.markets || []).filter(
-          (m: Market) => !/early\s*payout/i.test(m.name || '') // dublikatat 1X2
+          (m: Market) => !/early\s*payout/i.test(m.name || '') && !isUnnamedMarket(m.name)
         );
         setMarkets(ms);
       } catch (e) {
@@ -58,8 +58,20 @@ export default function MatchDetail() {
   }, [id]);
 
   // Klasifikimi i tregjeve ne seksione (seksioni i pare qe perputhet fiton)
-  const grouped = SECTIONS.map((sec) => ({ ...sec, items: markets.filter((m) => sec.match(m)) }))
-    .filter((s) => s.items.length > 0);
+  // EKSLUZIVE: çdo treg shfaqet vetem ne seksionin e PARË që përputhet.
+  // (Më parë 'Të tjera' kishte match:()=>true dhe i kapte TË GJITHA tregjet,
+  //  prandaj i njëjti treg dukej 2 herë: në seksionin e vet dhe në "Të tjera".)
+  const grouped = (() => {
+    const used = new Set<string>();
+    const out: { key: string; label: string; items: Market[] }[] = [];
+    for (const sec of SECTIONS) {
+      const items = markets.filter((m) => !used.has(m.id) && sec.match(m));
+      if (!items.length) continue;
+      items.forEach((m) => used.add(m.id));
+      out.push({ key: sec.key, label: sec.label, items });
+    }
+    return out;
+  })();
 
   const visibleSections = showAllSections ? grouped : grouped.filter((s) => s.key === 'main');
   const hiddenCount = grouped.filter((s) => s.key !== 'main').reduce((a, s) => a + s.items.length, 0);
@@ -118,12 +130,35 @@ export default function MatchDetail() {
           </div>
           <h2 className="text-lg sm:text-2xl font-bold text-white flex-1 text-center sm:text-left">{match.awayTeam}</h2>
         </div>
-        <div className="text-text-secondary text-xs sm:text-sm mt-3 flex items-center justify-center gap-3">
-          <span>{new Date(match.startTime).toLocaleString()}</span>
+        <div className="text-text-secondary text-xs sm:text-sm mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+          <span>{formatKickoff(match.startTime)}</span>
           {match.status === 'LIVE' && (
-            <span className="text-accent-red font-bold">{match.currentMinute ?? 0}&#39;</span>
+            <span className="text-accent-red font-bold">{minuteLabel(match)}</span>
+          )}
+          {match.status === 'LIVE' && periodLabel(match.period || '') && (
+            <span className="text-text-primary font-semibold">{periodLabel(match.period || '')}</span>
           )}
         </div>
+
+        {/* Statistikat live: kornera & kartona */}
+        {match.status === 'LIVE' && (
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs text-text-secondary">
+            <span className="flex items-center gap-1.5 bg-primary/50 px-2.5 py-1 rounded-lg">
+              <span>🚩</span> Kornera
+              <span className="font-bold text-text-primary">{match.homeCorners ?? 0} - {match.awayCorners ?? 0}</span>
+            </span>
+            <span className="flex items-center gap-1.5 bg-primary/50 px-2.5 py-1 rounded-lg">
+              <span>🟨</span> Kartonë
+              <span className="font-bold text-text-primary">{match.homeYellow ?? 0} - {match.awayYellow ?? 0}</span>
+            </span>
+            {(match.homeRed || match.awayRed) ? (
+              <span className="flex items-center gap-1.5 bg-primary/50 px-2.5 py-1 rounded-lg">
+                <span>🟥</span> Të kuq
+                <span className="font-bold text-accent-red">{match.homeRed ?? 0} - {match.awayRed ?? 0}</span>
+              </span>
+            ) : null}
+          </div>
+        )}
       </div>
 
       {match.status === 'LIVE' && <PitchTracker matchId={match.id} />}

@@ -120,6 +120,7 @@ export class LuckyBetFeed implements IFeedProvider {
         .then(() => this.cleanupEndedOld())
         .then(() => this.cleanupDuplicateMarkets())
         .then(() => this.cleanupVirtualMatches())
+        .then(() => this.cleanupUnnamedMarkets())
         .catch((e) => console.error('[LuckyBetFeed] cleanup:', e));
     }
     this.sync().catch((e) => console.error('[LuckyBetFeed] sync fillestar deshtoi:', e));
@@ -301,6 +302,28 @@ export class LuckyBetFeed implements IFeedProvider {
     console.log(`[LuckyBetFeed] Pastrim: u fshine ${toDelete.length} tregje te dublikuara/bosh.`);
   }
 
+  /** Fshin tregjet pa emer te vertete ("Market") qe nuk mund te shfaqen ne faqe. */
+  private async cleanupUnnamedMarkets() {
+    const junk = await prisma.market.findMany({
+      where: { name: 'Market', matchId: { startsWith: 'lb-' } },
+      select: { id: true }
+    });
+    if (!junk.length) return;
+
+    const ids = junk.map((m) => m.id);
+    const used = await prisma.ticketLine.findMany({ where: { marketId: { in: ids } }, select: { marketId: true } });
+    const keep = new Set(used.map((u) => u.marketId));
+    const toDelete = ids.filter((id) => !keep.has(id));
+    if (!toDelete.length) return;
+
+    for (let i = 0; i < toDelete.length; i += 200) {
+      const chunk = toDelete.slice(i, i + 200);
+      await prisma.outcome.deleteMany({ where: { marketId: { in: chunk } } });
+      await prisma.market.deleteMany({ where: { id: { in: chunk } } });
+    }
+    console.log(`[LuckyBetFeed] U fshine ${toDelete.length} tregje pa emer.`);
+  }
+
   /**
    * Fshin ndeshjet qe i perkasin kategorive virtuale (short-football, cyberfifa,
    * replays...) — keto kishin kaluar filtrin e vjeter dhe shfaqeshin si ndeshje
@@ -357,6 +380,9 @@ export class LuckyBetFeed implements IFeedProvider {
     const service = String(it.service || '').toUpperCase();
     const catId = Number(it.category?.id || 0);
     const tourId = Number(it.tournament?.id || 0);
+    // ID-te e ekipeve ne feed (per te lidhur statistikat scoreBoard: kornera/kartona)
+    const extHomeId = Number(it.homeTeam?.id) || null;
+    const extAwayId = Number(it.awayTeam?.id) || null;
 
     // Kalim i shpejte: nese asnje fushe e dukshme nuk ka ndryshuar, s'prekim DB fare
     const sig = `${home}|${away}|${startAt.getTime()}|${service}`;
@@ -410,6 +436,8 @@ export class LuckyBetFeed implements IFeedProvider {
           homeTeam: home,
           awayTeam: away,
           startTime: startAt,
+          extHomeId,
+          extAwayId,
           status: existing.status === 'LIVE' && status === 'PREMATCH' ? 'LIVE' : status
         }
       });
@@ -425,6 +453,8 @@ export class LuckyBetFeed implements IFeedProvider {
           currentMinute: 0,
           homeScore: 0,
           awayScore: 0,
+          extHomeId,
+          extAwayId,
           isSimulated: false,
           isSuspended: false
         }
@@ -626,17 +656,37 @@ export class LuckyBetFeed implements IFeedProvider {
     if (!cur || cur.status === 'ENDED') return;
 
     const raw = Number(d.matchTime ?? d.minute ?? 0);
-    // API dërgon matchTime në milisekonda (shih docs) -> kthe në minuta
-    const minute = raw > 1000 ? Math.floor(raw / 60000) : raw;
+    let minute = raw > 1000 ? Math.floor(raw / 60000) : raw;
+    // Fallback: nese feed-i nuk dergon minute (0), llogarite nga ora e fillimit.
+    // Pa kete, shume ndeshje qendronin ne "0'" ne faqe.
+    if (!minute || minute <= 0) {
+      const elapsed = Math.floor((Date.now() - cur.startTime.getTime()) / 60000);
+      minute = Math.max(0, Math.min(90, elapsed));
+    }
     const ended = st === 'Ended' || st === 'ENDED' || st === 'finished';
 
-    // Golat nuk zvogëlohen: snapshot-et stale (p.sh. 0-0 pas 2-1) hidhen poshtë.
     // Score-i merret ASHTU SI ESHTE: feed-i eshte burimi i se vertetes. NUK perdoret
     // Math.max (qe e bllokonte uijen e score-it) — keshtu pranohen korrigjimet:
     // gol i anuluar (0-1 -> 0-0), ose push i gabuar i korrigjuar nga feed-i.
     const s1 = hasScore ? r1 : (cur.homeScore ?? 0);
     const s2 = hasScore ? r2 : (cur.awayScore ?? 0);
     const scoreChanged = s1 !== cur.homeScore || s2 !== cur.awayScore;
+
+    // Statistikat live: scoreBoard.results eshte keyed nga id e ekipit ne feed,
+    // prandaj kerkohen me extHomeId/extAwayId (ruajtur gjate sinkronizimit).
+    const sts: any = {};
+    const sb = (d.scoreBoard?.results || {}) as Dict;
+    const pick = (tid: number | null | undefined, key: string): number | undefined => {
+      if (!tid || !sb[String(tid)]) return undefined;
+      const v = Number(sb[String(tid)][key]);
+      return Number.isFinite(v) ? v : undefined;
+    };
+    const hc = pick(cur.extHomeId, 'corners'); if (hc !== undefined) sts.homeCorners = hc;
+    const ac = pick(cur.extAwayId, 'corners'); if (ac !== undefined) sts.awayCorners = ac;
+    const hy = pick(cur.extHomeId, 'yellowCards'); if (hy !== undefined) sts.homeYellow = hy;
+    const ay = pick(cur.extAwayId, 'yellowCards'); if (ay !== undefined) sts.awayYellow = ay;
+    const hr = pick(cur.extHomeId, 'redCards'); if (hr !== undefined) sts.homeRed = hr;
+    const ar = pick(cur.extAwayId, 'redCards'); if (ar !== undefined) sts.awayRed = ar;
 
     // Bllokimi i golit: sahere ndryshon score → pezullo bastet (🔒 te frontend,
     // serveri refuzon betet) deri sa te vije push-i i pare me kuota te reja (applyOdds).
@@ -646,8 +696,10 @@ export class LuckyBetFeed implements IFeedProvider {
         homeScore: s1,
         awayScore: s2,
         currentMinute: Number.isFinite(minute) ? minute : cur.currentMinute,
+        period: st || cur.period,
         status: ended ? 'ENDED' : 'LIVE',
-        isSuspended: scoreChanged ? true : cur.isSuspended
+        isSuspended: scoreChanged ? true : cur.isSuspended,
+        ...sts
       }
     });
     // Ruaj "ts" e fundit te aplikuar — baza e renditjes per mesazhet e ardhshme
@@ -681,7 +733,8 @@ export class LuckyBetFeed implements IFeedProvider {
     let marketCount = existingMarkets.length;
 
     for (const g of groups) {
-      const rawName = String(g.name || '').trim() || 'Market';
+      const rawName = String(g.name || '').trim();
+      if (!rawName) continue; // grup pa emer (feed-i nuk jep) — nuk mund te shfaqet
       if (isJunkGroup(rawName)) continue; // dublikatat "Early payout" nuk krijohen me
 
       const marketType = marketTypeOf(rawName);
