@@ -74,14 +74,25 @@ export function periodLabel(status: string): string {
   return status;
 }
 
-/** Etiketa e minutës për ndeshje live: "67'", "Pushim", "Nis së shpejti"... */
+/** Etiketa e minutës për ndeshje live: "67'", ose statusi kur minutat mungojnë. */
 export function minuteLabel(m: { currentMinute?: number; period?: string | null }): string {
+  const min = Number(m?.currentMinute || 0);
   const p = String(m?.period || '').toLowerCase();
+
+  // Statuset e veçanta kanë përparësi ndaj minutës
   if (p) {
-    const special = periodLabel(p);
-    if (special !== p) return special; // Pushim / Përfundoi / Nis së shpejti / Shtesë...
+    if (p.includes('break') || p.includes('half-time') || p.includes('halftime') || p === 'ht') return 'Pushim';
+    if (p.includes('penalt')) return 'Penallti';
+    if (p.includes('extra time') || p.includes('overtime')) return 'Shtesë';
+    if (p.includes('about to start') || p.includes('not started') || p.includes('scheduled')) return 'Nis së shpejti';
+    if (p.includes('postpon')) return 'Shtyrë';
+    if (p.includes('cancel')) return 'Anuluar';
+    if (p.includes('end') || p.includes('finish')) return 'Përfundoi';
   }
-  return `${Number(m?.currentMinute || 0)}'`;
+
+  if (min > 0) return `${min}'`;
+  if (p) return periodLabel(p); // "Pjesa 1" / "Pjesa 2"
+  return "0'";
 }
 
 /** Ora e nisjes në shqip: "Sot, 20:45" · "Nesër, 18:00" · "17 Sht, 20:45". */

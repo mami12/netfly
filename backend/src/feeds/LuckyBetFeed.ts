@@ -663,7 +663,10 @@ export class LuckyBetFeed implements IFeedProvider {
       const elapsed = Math.floor((Date.now() - cur.startTime.getTime()) / 60000);
       minute = Math.max(0, Math.min(90, elapsed));
     }
-    const ended = st === 'Ended' || st === 'ENDED' || st === 'finished';
+    const ended = /end|finish/i.test(st);
+    // Feed-i i liston si "live" edhe ndeshjet qe S'KANE FILLUAR ("About to start",
+    // "Not started yet") -> ato duhet te mbeten PREMATCH, jo te shfaqen si LIVE.
+    const notStarted = /about to start|not started|scheduled|postpon|delay|cancel/i.test(st);
 
     // Score-i merret ASHTU SI ESHTE: feed-i eshte burimi i se vertetes. NUK perdoret
     // Math.max (qe e bllokonte uijen e score-it) — keshtu pranohen korrigjimet:
@@ -697,7 +700,7 @@ export class LuckyBetFeed implements IFeedProvider {
         awayScore: s2,
         currentMinute: Number.isFinite(minute) ? minute : cur.currentMinute,
         period: st || cur.period,
-        status: ended ? 'ENDED' : 'LIVE',
+        status: ended ? 'ENDED' : notStarted ? 'PREMATCH' : 'LIVE',
         isSuspended: scoreChanged ? true : cur.isSuspended,
         ...sts
       }
