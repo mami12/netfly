@@ -4,10 +4,11 @@ import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
 import { Ticket } from '../types';
-import { formatMoney } from '../utils/format';
+import { formatMoney, translateStatus } from '../utils/format';
+import { marketLabel, outcomeLabel } from '../utils/labels';
 
 export default function MyBetsPage() {
-  const { t } = useLanguage();
+  const { t, tm } = useLanguage();
   const { user, isAuthenticated, refreshUser } = useAuth();
   const [activeTickets, setActiveTickets] = useState<Ticket[]>([]);
   const [historyTickets, setHistoryTickets] = useState<Ticket[]>([]);
@@ -64,11 +65,17 @@ export default function MyBetsPage() {
             <div key={idx} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
               <div className="flex-1 min-w-0">
                 <div className="font-semibold text-white truncate">{line.matchName}</div>
-                <div className="text-text-secondary text-xs">{line.marketName} - {line.outcomeName}</div>
+                <div className="text-text-secondary text-xs">
+                  {marketLabel(line.marketName, t, tm)} -{' '}
+                  {outcomeLabel(line.outcomeName, {
+                    marketName: line.marketName,
+                    teams: String(line.matchName || '').split(/\s+vs\s+/i)
+                  })}
+                </div>
               </div>
               <div className="text-right">
                 <div className="text-accent-green font-bold">@{line.oddsAtPlacement.toFixed(2)}</div>
-                <div className="text-xs text-text-secondary">{line.status}</div>
+                <div className="text-xs text-text-secondary">{translateStatus(line.status).label}</div>
               </div>
             </div>
           ))}

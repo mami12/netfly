@@ -5,14 +5,15 @@ import { useAuth } from '../../context/AuthContext';
 import { Trash2, AlertTriangle, Search, Ticket as TicketIcon, X } from 'lucide-react';
 import BookingModal from './BookingModal';
 import { apiClient } from '../../api/client';
-import { formatMoney } from '../../utils/format';
+import { formatMoney, translateStatus } from '../../utils/format';
+import { marketLabel, outcomeLabel } from '../../utils/labels';
 
 export default function Betslip() {
   const { 
     selections, stake, setStake, ticketType, setTicketType, systemType, setSystemType, 
     removeSelection, clearAll, totalOdds, potentialPayout, placeBet, bookTicket 
   } = useBetslip();
-  const { t } = useLanguage();
+  const { t, tm } = useLanguage();
   const { user, refreshUser } = useAuth();
   
   const [oddsChangedError, setOddsChangedError] = useState(false);
@@ -114,11 +115,17 @@ export default function Betslip() {
             <div key={idx} className="flex justify-between items-center text-xs">
               <div className="min-w-0">
                 <div className="font-semibold text-white truncate">{line.matchName}</div>
-                <div className="text-text-secondary">{line.marketName} - {line.outcomeName}</div>
+                <div className="text-text-secondary">
+                  {marketLabel(line.marketName, t, tm)} -{' '}
+                  {outcomeLabel(line.outcomeName, {
+                    marketName: line.marketName,
+                    teams: String(line.matchName || '').split(/\s+vs\s+/i)
+                  })}
+                </div>
               </div>
               <div className="text-right shrink-0 ml-2">
                 <span className="text-accent-green font-bold">@{line.oddsAtPlacement?.toFixed(2)}</span>
-                <div className="text-[10px] text-text-secondary">{line.status}</div>
+                <div className="text-[10px] text-text-secondary">{translateStatus(line.status).label}</div>
               </div>
             </div>
           ))}
@@ -212,9 +219,11 @@ export default function Betslip() {
                   <Trash2 size={16} />
                 </button>
                 <div className="text-xs text-text-secondary mb-1">{s.matchName}</div>
-                <div className="text-sm font-semibold text-white">{s.marketName}</div>
+                <div className="text-sm font-semibold text-white">{marketLabel(s.marketName, t, tm)}</div>
                 <div className="flex justify-between items-center mt-2">
-                  <span className="text-sm text-accent-green">{s.outcomeName}</span>
+                  <span className="text-sm text-accent-green">
+                    {outcomeLabel(s.outcomeName, { marketName: s.marketName, teams: String(s.matchName || '').split(/\s+vs\s+/i) })}
+                  </span>
                   <span className="font-bold text-white">{s.odds.toFixed(2)}</span>
                 </div>
               </div>
@@ -231,9 +240,9 @@ export default function Betslip() {
           <div className="p-4 bg-tertiary space-y-4">
             {ticketType === 'SYSTEM' && (
               <div>
-                <label className="text-xs text-text-secondary block mb-1">System Type</label>
+                <label className="text-xs text-text-secondary block mb-1">{t('betslip.system_type')}</label>
                 <select className="w-full bg-primary border border-secondary rounded p-2 text-white" value={systemType} onChange={e => setSystemType(e.target.value)}>
-                   <option value="">Select System</option>
+                   <option value="">{t('betslip.select_system')}</option>
                    {Array.from({length: selections.length - 1}).map((_, i) => (
                      <option key={i} value={`${i+2}/${selections.length}`}>{i+2}/{selections.length}</option>
                    ))}

@@ -81,9 +81,12 @@ export function useWebSocket() {
                 }
               }));
             }
-          } else if (channel?.startsWith('match:')) {
+          } else if (channel === 'matches' || channel?.startsWith('match:')) {
+            if (payload?.type === 'STATUS') {
+              window.dispatchEvent(new CustomEvent('netfly:match-status', { detail: payload }));
+            }
             // MatchEvent from server: { matchId, type, team, minute }
-            if (payload?.matchId) {
+            if (payload?.matchId && payload.type !== 'STATUS') {
               setMatchEvents(prev => [...prev, {
                 matchId: payload.matchId,
                 type: payload.type || '',

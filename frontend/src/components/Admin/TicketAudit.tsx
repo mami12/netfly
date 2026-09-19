@@ -2,8 +2,16 @@ import { useState, useEffect } from 'react';
 import { apiClient } from '../../api/client';
 import { ChevronDown, ChevronUp, Ticket as TicketIcon, CheckCircle2, XCircle, Clock, RotateCcw } from 'lucide-react';
 import { formatMoney, translateStatus, translateTicketType } from '../../utils/format';
+import { marketLabel, outcomeLabel } from '../../utils/labels';
+import { useLanguage } from '../../context/LanguageContext';
 
 export default function TicketAudit() {
+  const { t, tm } = useLanguage();
+
+  /** Emrat e tregjeve/opsioneve vijne ne anglisht nga feed-i -> etiketa shqip. */
+  const lineMarket = (name?: string) => marketLabel(name || '', t, tm);
+  const lineOutcome = (name?: string, market?: string, matchName?: string) =>
+    outcomeLabel(name || '', { marketName: market, teams: String(matchName || '').split(/\s+vs\s+/i) });
   const [tickets, setTickets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null);
@@ -161,7 +169,10 @@ export default function TicketAudit() {
                             <div className="space-y-0.5">
                               <div className="text-text-secondary">{line.matchName}</div>
                               <div className="font-semibold text-white">
-                                {line.marketName}: <span className="text-accent-green font-bold">{line.outcomeName}</span>
+                                {lineMarket(line.marketName)}:{' '}
+                                <span className="text-accent-green font-bold">
+                                  {lineOutcome(line.outcomeName, line.marketName, line.matchName)}
+                                </span>
                               </div>
                             </div>
                             <div className="text-right">

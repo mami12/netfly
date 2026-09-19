@@ -43,6 +43,7 @@ feed.onMatchEvent((event) => {
   wsService.broadcast(`match:${event.matchId}`, event);
 });
 feed.onMatchStatusChange((matchId, status, minute, homeScore, awayScore) => {
+  wsService.broadcast('matches', { type: 'STATUS', matchId, status, minute, homeScore, awayScore });
   wsService.broadcast(`match:${matchId}`, { type: 'STATUS', matchId, status, minute, homeScore, awayScore });
 });
 

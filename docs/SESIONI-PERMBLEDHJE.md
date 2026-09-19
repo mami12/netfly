@@ -45,7 +45,7 @@ Grupet "Early payout" (emri përmban score-in, p.sh. `Full time result (Early pa
 | **GitHub** | Kodi burim | `https://github.com/mami12/netfly` (monorepo: `backend/` + `frontend/`) |
 | **Render** | Hosting **BACKEND** (Web Service, root `backend`) | `netfly-backend-1.onrender.com` |
 | **GitHub Pages** | Hosting **FRONTEND** (dega `gh-pages` e `netfly-frontend`) | `mami12.github.io/netfly-frontend` |
-| **Neon** | Baza Postgres | `ep-jolly-pine-b4zrmc2q.c-6.us-east-2.aws.neon.tech` → db `neondb` |
+| **Supabase** | Baza Postgres (projekt `tvynxkthwxlxjlllehgo`, region `eu-west-1`) | Session pooler: `aws-1-eu-west-1.pooler.supabase.com:5432` |
 | **JWT** | Sesionet e përdoruesve | `JWT_SECRET` (env në Render) |
 
 > **Frontend-i NUK është në Render** — është në GitHub Pages. Deploy-i i frontend-it bëhet
@@ -54,10 +54,15 @@ Grupet "Early payout" (emri përmban score-in, p.sh. `Full time result (Early pa
 
 **DATABASE_URL (i plotë, me parametrat e nevojshëm):**
 ```
-postgresql://neondb_owner:...@ep-jolly-pine-b4zrmc2q.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require&connection_limit=10&pool_timeout=30
+postgresql://postgres.tvynxkthwxlxjlllehgo:<PASSWORD>@aws-1-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require&connection_limit=10&pool_timeout=30
 ```
 > `connection_limit=10&pool_timeout=30` janë **të detyrueshëm** — pa ata pool-i i Prisma-s
 > mbushet dhe kuotat nuk shkruhen (gabimi `Timed out fetching a new connection`).
+>
+> ⚠️ **Mos përdor host-in direkt** `db.tvynxkthwxlxjlllehgo.supabase.co` — projekteve të reja
+> Supabase u jepet **vetëm IPv6** (`2a05:d018:...`, pa record A), ndërsa **Render-i nuk ka
+> dalje IPv6**, prandaj lidhja dështon me `ENOTFOUND`. Gjithmonë URL-ja e **Session pooler**
+> (Supavisor, IPv4): `aws-<n>-<region>.pooler.supabase.com:5432` me user `postgres.<project-ref>`.
 
 **Frontend-i** lexon backend-in nga `frontend/.env`:
 ```
@@ -67,7 +72,7 @@ VITE_WS_URL=wss://netfly-backend-1.onrender.com
 
 ---
 
-## 4. Baza e të dhënave (Prisma + PostgreSQL/Neon)
+## 4. Baza e të dhënave (Prisma + PostgreSQL/Supabase)
 
 Skema: `backend/prisma/schema.prisma`
 
@@ -93,7 +98,7 @@ procese shkruajnë njëkohësisht, dublikata fizikisht nuk mund të krijohet.
 ```
 feed-i (LuckyBet)          backend (Render)                       frontend (React)
 ──────────────────         ───────────────────────                ─────────────────
-POST /matches/get-many ──► LuckyBetFeed.doSync()  ── upsert ──►    Neon (Postgres)
+POST /matches/get-many ──► LuckyBetFeed.doSync()  ── upsert ──►    Supabase (Postgres)
    (çdo 60 s)                 ↓                                       ↑
                               endMatch() → BetSettler.settleMatch()    │
                                                                        │
@@ -300,7 +305,9 @@ Shërbimi i backend-it ka `Root Directory` të gabuar (u vendos `frontend`), pra
 - **Root Directory** = **`backend`**  ← ktheje mbrapsht!
 - **Build Command** = `npm install && npm run build && npm run db:seed`
 - **Start Command** = `npm start`
-- **Environment** → `DATABASE_URL` duhet të përmbajë `&connection_limit=10&pool_timeout=30`
+- **Environment** → `DATABASE_URL` = URL-ja e **Session pooler** të Supabase (IPv4, port 5432):
+  `postgresql://postgres.tvynxkthwxlxjlllehgo:<PASSWORD>@aws-1-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require&connection_limit=10&pool_timeout=30`
+  (host-i direkt `db.<ref>.supabase.co` është IPv6-only → Render nuk lidhet dot)
 → Save → Manual Deploy → Deploy latest commit
 
 ### 9.2 Frontend (GitHub Pages) ✅ U BË
@@ -315,10 +322,10 @@ powershell -ExecutionPolicy Bypass -File frontend\deploy-gh-pages.ps1
 Pas kësaj, **një `git push` i vetëm përditëson të dyja** (frontend + backend).
 
 ### 9.3 Përmirësime të mundshme më tej
-- Mbulim më i plotë i kuotave për prematch (rritja e dritares) — varet nga sa e duron Neon falas
+- Mbulim më i plotë i kuotave për prematch (rritja e dritares) — varet nga sa e duron Supabase falas
 - Faqosje më e detajuar e tregjeve komplekse (kornera/kartona) sipas grupeve
 - Cache në memorie për `/api/matches` që faqja të hapet më shpejt
-- Postgres me pagesë (Neon) për më shumë lidhje + më shumë shkrime/s
+- Postgres me pagesë (Supabase Pro) për më shumë lidhje + më shumë shkrime/s
 
 ---
 
@@ -330,7 +337,7 @@ cd backend
 npx tsx src/index.ts          # nis serverin (port 3001)
 
 # Baza e të dhënave
-npx prisma db push            # zbaton skemën në Neon
+npx prisma db push            # zbaton skemën në Supabase
 npx prisma generate           # rigjeneron client-in
 npx tsx prisma/seed.ts        # krijon admin + menaxher
 

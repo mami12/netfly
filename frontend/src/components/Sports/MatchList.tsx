@@ -3,7 +3,7 @@ import { apiClient } from '../../api/client';
 import { useLanguage } from '../../context/LanguageContext';
 import { Match } from '../../types';
 import OddsButton from './OddsButton';
-import { minuteLabel, formatKickoff } from '../../utils/labels';
+import { minuteLabel, formatKickoff, kickoffLabel, matchTimeLabel } from '../../utils/labels';
 import { useNavigate } from 'react-router-dom';
 import { Radio, ChevronRight, Clock, Shield, Search, CalendarDays } from 'lucide-react';
 
@@ -45,7 +45,28 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
   useEffect(() => {
     fetchMatches();
     const interval = setInterval(fetchMatches, 15000); // refresh every 15s
-    return () => clearInterval(interval);
+
+    const handleStatus = (e: any) => {
+      const { matchId, status, minute, homeScore, awayScore } = e.detail || {};
+      setMatches(prev => prev.map(m => {
+        if (m.id === matchId) {
+          return {
+            ...m,
+            status: status || m.status,
+            currentMinute: minute !== undefined ? minute : m.currentMinute,
+            homeScore: homeScore !== undefined ? homeScore : m.homeScore,
+            awayScore: awayScore !== undefined ? awayScore : m.awayScore
+          };
+        }
+        return m;
+      }));
+    };
+    window.addEventListener('netfly:match-status', handleStatus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('netfly:match-status', handleStatus);
+    };
   }, [tournamentId, categoryId, sportId, isLiveOnly]);
 
   // Filter matches by search term
@@ -110,16 +131,24 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
    */
   const pick1X2 = (m: any) => {
     const markets: any[] = (m.markets || []).filter((x: any) => !/early\s*payout/i.test(x.name || ''));
-    const mk = markets.find((x: any) =>
-      x.marketType === '1X2' || x.name === '1X2' || /full\s*time\s*result|match\s*winner|^result$/i.test(x.name || '')
-    );
+    // "Match time result" (rezultati ne minutën X) NUK eshte 1X2 — s'duhet te dale
+    // si 1/X/2 ne liste. Preferohet tregu me 3 opsione (1 / X / 2).
+    const candidates = markets.filter((x: any) => {
+      const name = String(x.name || '').trim();
+      if (/time result/i.test(name)) return false;
+      return x.marketType === '1X2' || /^(1x2|match winner|match result|full ?time result|result)$/i.test(name);
+    });
+    const mk = candidates.find((x: any) => ((x.outcomes || []).length >= 3)) || candidates[0];
     if (!mk) return { market: null, o1: null, oX: null, o2: null };
     const outs: any[] = mk.outcomes || [];
     const byCode = (c: string) => outs.find((o: any) => String(o.code || '').toLowerCase() === c);
     const byName = (re: RegExp) => outs.find((o: any) => re.test(String(o.name || '').trim()));
-    const o1 = byCode('1') || byName(/^1$/) || outs.find((o: any) => o.name === m.homeTeam);
-    const oX = byCode('x') || byName(/^(x|draw)$/i);
-    const o2 = byCode('2') || byName(/^2$/) || outs.find((o: any) => o.name === m.awayTeam);
+    const o1 = byCode('1') || byName(/^1$/) || outs.find((o: any) => o.name === m.homeTeam || (m.homeTeam && o.name?.toLowerCase() === m.homeTeam.toLowerCase()));
+    const oX = byCode('x') || byName(/^(x|draw|barazim)$/i);
+    const o2 = byCode('2') || byName(/^2$/) || outs.find((o: any) => o.name === m.awayTeam || (m.awayTeam && o.name?.toLowerCase() === m.awayTeam.toLowerCase()));
+    if (o1 && !o1.code) o1.code = '1';
+    if (oX && !oX.code) oX.code = 'x';
+    if (o2 && !o2.code) o2.code = '2';
     return { market: mk, o1, oX, o2 };
   };
 
@@ -128,12 +157,23 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     const cat = m.tournament?.category?.name;
     const tour = m.tournament?.name;
     if (cat && tour) return `${cat} - ${tour}`;
-    return tour || cat || 'Të tjera';
+    return tour || cat || 'Të Tjera';
+  };
+
+  /** A ka filluar ndeshja brenda 10 minutave te fundit (ndeshje e re live)? */
+  const isFreshlyStarted = (m: any) => {
+    if (m.status !== 'LIVE') return false;
+    const t = new Date(m.startTime).getTime();
+    if (!Number.isFinite(t)) return false;
+    const min = (Date.now() - t) / 60000;
+    return min >= 0 && min <= 10;
   };
 
   /**
-   * Grupon ndeshjet sipas ligeve/kupave: kupa indiane -> ndeshjet indiane,
-   * kupa italiane -> ato italiane, etj. Ligat me shume ndeshje dalin te parat.
+   * Grupon ndeshjet sipas kategorive/ligave: kupa indiane -> ndeshjet indiane,
+   * kupa italiane -> ato italiane, etj. Grupet me shume ndeshje LIVE dalin te
+   * parat, pastaj ato me ndeshjen me te afert. Ndeshjet e reja qe shtohen ose
+   * fillojne kane nje grup te tyre (kategoria nuk humbet kurre).
    */
   const groupByLeague = (list: any[]) => {
     const map = new Map<string, any[]>();
@@ -142,12 +182,24 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
       const arr = map.get(key);
       if (arr) arr.push(m); else map.set(key, [m]);
     }
+    const collator = new Intl.Collator('sq');
     return Array.from(map.entries())
-      .map(([name, matches]) => ({ name, matches }))
-      .sort((a, b) => b.matches.length - a.matches.length || a.name.localeCompare(b.name));
+      .map(([name, matches]) => {
+        const sorted = [...matches].sort((a, b) => {
+          if (a.status !== b.status) return a.status === 'LIVE' ? -1 : 1; // LIVE te parat
+          return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+        });
+        return {
+          name,
+          matches: sorted,
+          liveCount: sorted.filter((x) => x.status === 'LIVE').length,
+          nextStart: new Date(sorted[0]?.startTime || 0).getTime()
+        };
+      })
+      .sort((a, b) => b.liveCount - a.liveCount || a.nextStart - b.nextStart || collator.compare(a.name, b.name));
   };
 
-  /** Ndeshjet e grupuara sipas ligeve, me krye per secilin grup. */
+  /** Ndeshjet e grupuara sipas kategorive/ligave, me krye per secilin grup. */
   const renderGrouped = (list: any[]) => (
     <div className="space-y-5">
       {groupByLeague(list).map((g) => (
@@ -155,6 +207,11 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
           <div className="flex items-center gap-2 border-l-2 border-accent-green pl-2">
             <span className="text-xs font-bold text-text-primary uppercase tracking-wide truncate">{g.name}</span>
             <span className="text-[10px] text-text-secondary font-medium shrink-0">({g.matches.length})</span>
+            {g.liveCount > 0 && (
+              <span className="text-[10px] bg-accent-red text-white font-black px-1.5 py-0.5 rounded-full shrink-0">
+                {g.liveCount} LIVE
+              </span>
+            )}
           </div>
           <div className="space-y-3">{g.matches.map(renderMatchCard)}</div>
         </div>
@@ -168,39 +225,54 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     // Tregjet dublikate (Early payout) nuk numërohen
     const totalMarketsCount = (m.markets || []).filter((mk: any) => !/early\s*payout/i.test(mk.name || '')).length;
 
+    // Ora e fillimit ne formatin 14:15 (per badge-in LIVE)
+    const clockOf = (iso: string) => {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return '';
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+
     return (
       <div 
         key={m.id} 
         className="bg-secondary rounded-xl border border-tertiary shadow-md hover:border-text-secondary/40 transition overflow-hidden group"
       >
         {/* Card Header: Tournament & Time/Status */}
-        <div className="bg-primary/50 px-4 py-2 border-b border-tertiary/60 flex items-center justify-between text-xs">
+        <div className="bg-primary/50 px-4 py-2 border-b border-tertiary/60 flex items-center justify-between text-xs gap-2">
           <div className="flex items-center gap-2 text-text-secondary truncate">
             <span className="font-semibold text-text-primary truncate">
-              {m.tournament?.category?.name ? `${m.tournament.category.name} - ` : ''}{m.tournament?.name || 'League'}
+              {m.tournament?.category?.name ? `${m.tournament.category.name} - ` : ''}{m.tournament?.name || 'Kampionat'}
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isFreshlyStarted(m) && (
+              <span className="bg-accent-green/20 text-accent-green border border-accent-green/40 text-[10px] px-1.5 py-0.5 rounded font-black tracking-wide">
+                {t('sections.new_tag')}
+              </span>
+            )}
             {!m.isSimulated && (
               <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] px-1.5 py-0.5 rounded font-black tracking-wide">
-                REALE
+                {t('sections.real_tag')}
               </span>
             )}
             {m.isSuspended && (
               <span className="bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] px-1.5 py-0.5 rounded font-black tracking-wide">
-                 PEZULLUAR
+                {t('sections.suspended_tag')}
               </span>
             )}
             {m.status === 'LIVE' ? (
-              <span className="inline-flex items-center gap-1 bg-accent-red text-white text-[10px] font-black px-2 py-0.5 rounded-full">
-                <Radio size={10} />
-                LIVE · {minuteLabel(m)}
+              <span
+                className="inline-flex items-center gap-1.5 bg-accent-red text-white text-[10px] font-black px-2.5 py-0.5 rounded-full whitespace-nowrap shadow-sm"
+                title={matchTimeLabel(m.startTime, m.status)}
+              >
+                <Radio size={10} className="animate-pulse" />
+                {minuteLabel(m)} · {matchTimeLabel(m.startTime, m.status)}
               </span>
             ) : (
-              <span className="text-text-secondary flex items-center gap-1">
+              <span className="text-text-secondary flex items-center gap-1 whitespace-nowrap text-xs font-semibold">
                 <Clock size={12} />
-                {formatKickoff(m.startTime)}
+                {matchTimeLabel(m.startTime, m.status)}
               </span>
             )}
           </div>
@@ -357,6 +429,9 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
             <span className="w-2.5 h-2.5 rounded-full bg-accent-red animate-ping"></span>
             <span className="text-accent-red font-black uppercase">{t('sections.live_now')}</span>
             <span className="text-xs text-text-secondary font-medium">({liveMatches.length})</span>
+            <span className="text-[10px] text-text-secondary font-medium ml-auto hidden sm:inline">
+              {t('sections.grouped_by_category')} · {t('sections.minutes_auto')}
+            </span>
           </div>
 
           {renderGrouped(liveMatches)}
@@ -366,8 +441,11 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
       {/* Prematch / Upcoming Section */}
       {prematchMatches.length > 0 && (
         <div className="space-y-3">
-          <div className="text-white font-bold text-sm tracking-wide uppercase flex items-center justify-between">
+          <div className="text-white font-bold text-sm tracking-wide uppercase flex items-center justify-between gap-2">
             <span>{isLiveOnly ? t('sections.live_now') : t('sections.upcoming_fixtures')} ({prematchMatches.length})</span>
+            <span className="text-[10px] text-text-secondary font-medium normal-case hidden sm:inline">
+              {t('sections.grouped_by_category')} · {t('sections.kickoff_in_albanian')}
+            </span>
           </div>
 
           {renderGrouped(prematchMatches)}

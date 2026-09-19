@@ -72,8 +72,32 @@ router.get('/sports/:sportId/matches', async (req, res) => {
 router.get('/matches/:id', async (req, res) => {
   const match = await prisma.match.findUnique({
     where: { id: req.params.id },
-    include: { markets: { include: { outcomes: true } } }
+    include: {
+      markets: {
+        include: { outcomes: { orderBy: { id: 'asc' } } },
+        orderBy: { sortOrder: 'asc' }
+      }
+    }
   });
+  if (!match) return res.status(404).json({ error: 'Match not found' });
+
+  // Deduplicate markets by normalized name, preference for market with more outcomes
+  const seen = new Map<string, any>();
+  const cleanMarkets: any[] = [];
+  for (const m of match.markets) {
+    if (!m.name || /early\s*payout/i.test(m.name)) continue;
+    const norm = m.name.trim().toLowerCase();
+    const existing = seen.get(norm);
+    if (!existing) {
+      seen.set(norm, m);
+      cleanMarkets.push(m);
+    } else if ((m.outcomes?.length || 0) > (existing.outcomes?.length || 0)) {
+      const idx = cleanMarkets.indexOf(existing);
+      if (idx !== -1) cleanMarkets[idx] = m;
+      seen.set(norm, m);
+    }
+  }
+  (match as any).markets = cleanMarkets;
   res.json(match);
 });
 

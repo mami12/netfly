@@ -1,4 +1,4 @@
-﻿import { IFeedProvider, MatchEvent, OddsDelta, PitchState } from './IFeedProvider';
+import { IFeedProvider, MatchEvent, OddsDelta, PitchState } from './IFeedProvider';
 import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
 import { randomUUID } from 'crypto';
@@ -31,6 +31,9 @@ const isJunkGroup = (name: string) => /early\s*payout/i.test(name || '');
 /** Sa milisekonda qendrojne kuotat e pezulluara pas nje goli, ne rast se feed-i nuk dergon update. */
 const SUSPEND_GRACE_MS = 25 * 1000;
 
+/** Minutat 1..120 (0 = e panjohur). Ndeshjet live nuk shfaqen me "0'". */
+const clampMinute = (m: number) => (Number.isFinite(m) && m > 0 ? Math.min(120, Math.max(1, Math.round(m))) : 0);
+
 const STATS_HINTS = ['corner', 'card', 'shot', 'offside'];
 /** Emri i grupit nga feed-i -> marketType i brendshem (per gjykim + shfaqje). */
 function marketTypeOf(name: string): string {
@@ -53,6 +56,10 @@ function marketTypeOf(name: string): string {
   if (n.includes('correct score')) return 'CORRECT_SCORE';
   if (n.includes('exact number of goals')) return 'EXACT_GOALS';
   if (n.includes('odd/even') || n.includes('even/odd')) return 'ODD_EVEN';
+  // "Match time result" = kush eshte duke fituar ne minutën X — NUK eshte 1X2
+  if (n.includes('match time result')) return 'TIME_RESULT';
+  // "Total from 1 to 10 minute" = gola brenda nje intervali kohe — NUK eshte total ekipi
+  if (/from \d+ to \d+ minute/.test(n)) return 'INTERVAL_TOTAL';
   if (n.includes('handicap')) return 'HANDICAP';
   if (n.includes('total')) {
     if (n.startsWith('total') || n.startsWith('over') || n.startsWith('under')) return 'OVER_UNDER';
@@ -87,7 +94,7 @@ export class LuckyBetFeed implements IFeedProvider {
   private subOffset = 0;                            // dritare rrotulluese mbi prematch
   private catNames = new Map<number, string>();
   private catSlugs = new Map<number, string>();
-  // Cache ne memorie: me DB remote (Neon) shmangen ~5 pyetje/ndeshje
+  // Cache ne memorie: me DB remote (Supabase) shmangen ~5 pyetje/ndeshje
   private sportId: number | null = null;
   private catIds = new Map<string, number>();      // catName -> id
   private tourIds = new Map<string, number>();     // catId|tourSlug -> id
@@ -97,6 +104,7 @@ export class LuckyBetFeed implements IFeedProvider {
   // ne çdo match-info: mesazhet me ts me te vjeter hidhen poshtë (renditje e sakte),
   // keshtu korrigjimet e score-it (p.sh. gol i anuluar 0-1 -> 0-0) pranohen.
   private infoTs = new Map<string, number>();
+  private teamIdMap = new Map<string, { homeId: number; awayId: number }>();
   // Radha per-ndeshje: kuotat perpunojne NJE PER NJE (pa kjo, dy mesazhe te njekoheshme
   // krijonin tregje te dublikuara, sepse te dyja nuk e gjenin tregun ekzistues).
   private oddsQueue = new Map<string, Promise<void>>();
@@ -215,7 +223,7 @@ export class LuckyBetFeed implements IFeedProvider {
     // Abono menjehere: kuotat fillojne te vijne pa pritur sinkronizimin e DB-se
     this.subscribeCycle();
 
-    // 2) Sinkronizimi ne DB (i ngadalte me Neon) — kryhet tani qe abonimi ka nisur
+    // 2) Sinkronizimi ne DB (i ngadalte me DB remote) — kryhet tani qe abonimi ka nisur
     for (const t of todo) {
       await this.upsertMatch(t.it, t.catSlug);
     }
@@ -230,6 +238,19 @@ export class LuckyBetFeed implements IFeedProvider {
       if (Number.isFinite(ext) && !keep.has(ext)) await this.endMatch(ext);
     }
     console.log(`[LuckyBetFeed] Sync: ${keep.size} ndeshje futbolli reale (${liveNew.length} live).`);
+
+    // Rrjetë sigurie për minutat: ndeshjet LIVE që nuk kanë marrë kurrë
+    // informacion nga feed-i qëndronin në "0'" në faqe. Një pyetje e vetme i
+    // mbush minutat nga ora e fillimit (vlera e feed-it nuk preket kurre).
+    try {
+      const fixed = await prisma.$executeRaw`
+        UPDATE "Match"
+        SET "currentMinute" = LEAST(120, GREATEST(1, FLOOR(EXTRACT(EPOCH FROM (NOW() - "startTime")) / 60)::int))
+        WHERE "status" = 'LIVE' AND "currentMinute" = 0 AND "startTime" < NOW()`;
+      if (fixed > 0) console.log(`[LuckyBetFeed] Minutat u mbushën automatikisht për ${fixed} ndeshje live.`);
+    } catch (e: any) {
+      console.error('[LuckyBetFeed] Mbushja e minutave dështoi:', e?.message);
+    }
 
     // Rrjetë sigurie: nëse pas një goli feed-i nuk dërgoi kuota të reja, ç-pezullo pas 25s
     // (përveç pezullimit manual të adminit).
@@ -381,11 +402,14 @@ export class LuckyBetFeed implements IFeedProvider {
     const catId = Number(it.category?.id || 0);
     const tourId = Number(it.tournament?.id || 0);
     // ID-te e ekipeve ne feed (per te lidhur statistikat scoreBoard: kornera/kartona)
-    const extHomeId = Number(it.homeTeam?.id) || null;
-    const extAwayId = Number(it.awayTeam?.id) || null;
+    const extHomeId = Number(it.homeTeam?.id) || Number(it.competitors?.find((c: any) => c.position === 1)?.id) || null;
+    const extAwayId = Number(it.awayTeam?.id) || Number(it.competitors?.find((c: any) => c.position === 2)?.id) || null;
+    if (extHomeId && extAwayId) {
+      this.teamIdMap.set(dbId, { homeId: extHomeId, awayId: extAwayId });
+    }
 
     // Kalim i shpejte: nese asnje fushe e dukshme nuk ka ndryshuar, s'prekim DB fare
-    const sig = `${home}|${away}|${startAt.getTime()}|${service}`;
+    const sig = `${home}|${away}|${startAt.getTime()}|${service}|${extHomeId}|${extAwayId}`;
     if (this.matchSig.get(dbId) === sig) return;
 
     // Sport (1 here per proces)
@@ -450,7 +474,9 @@ export class LuckyBetFeed implements IFeedProvider {
           awayTeam: away,
           startTime: startAt,
           status,
-          currentMinute: 0,
+          // LIVE: nis me minutën e llogaritur nga ora e fillimit — faqja nuk
+          // shfaq "0'" derisa te vije push-i i pare i informacionit te feed-it.
+          currentMinute: status === 'LIVE' ? clampMinute((Date.now() - startAt.getTime()) / 60000) : 0,
           homeScore: 0,
           awayScore: 0,
           extHomeId,
@@ -657,11 +683,10 @@ export class LuckyBetFeed implements IFeedProvider {
 
     const raw = Number(d.matchTime ?? d.minute ?? 0);
     let minute = raw > 1000 ? Math.floor(raw / 60000) : raw;
-    // Fallback: nese feed-i nuk dergon minute (0), llogarite nga ora e fillimit.
-    // Pa kete, shume ndeshje qendronin ne "0'" ne faqe.
+    // Fallback: nese feed-i nuk dergon minute (0), llogarite nga ora e fillimit (kurre 0 per ndeshje live).
     if (!minute || minute <= 0) {
       const elapsed = Math.floor((Date.now() - cur.startTime.getTime()) / 60000);
-      minute = Math.max(0, Math.min(90, elapsed));
+      minute = Math.max(1, Math.min(120, elapsed));
     }
     const ended = /end|finish/i.test(st);
     // Feed-i i liston si "live" edhe ndeshjet qe S'KANE FILLUAR ("About to start",
@@ -674,22 +699,34 @@ export class LuckyBetFeed implements IFeedProvider {
     const s1 = hasScore ? r1 : (cur.homeScore ?? 0);
     const s2 = hasScore ? r2 : (cur.awayScore ?? 0);
     const scoreChanged = s1 !== cur.homeScore || s2 !== cur.awayScore;
+    const finalStatus = ended ? 'ENDED' : notStarted ? 'PREMATCH' : 'LIVE';
+    const statusChanged = finalStatus !== cur.status;
+    const minuteChanged = minute !== cur.currentMinute;
 
     // Statistikat live: scoreBoard.results eshte keyed nga id e ekipit ne feed,
     // prandaj kerkohen me extHomeId/extAwayId (ruajtur gjate sinkronizimit).
     const sts: any = {};
     const sb = (d.scoreBoard?.results || {}) as Dict;
+    const homeId = cur.extHomeId || this.teamIdMap.get(dbId)?.homeId;
+    const awayId = cur.extAwayId || this.teamIdMap.get(dbId)?.awayId;
+    if (homeId && !cur.extHomeId) sts.extHomeId = homeId;
+    if (awayId && !cur.extAwayId) sts.extAwayId = awayId;
+
     const pick = (tid: number | null | undefined, key: string): number | undefined => {
       if (!tid || !sb[String(tid)]) return undefined;
       const v = Number(sb[String(tid)][key]);
       return Number.isFinite(v) ? v : undefined;
     };
-    const hc = pick(cur.extHomeId, 'corners'); if (hc !== undefined) sts.homeCorners = hc;
-    const ac = pick(cur.extAwayId, 'corners'); if (ac !== undefined) sts.awayCorners = ac;
-    const hy = pick(cur.extHomeId, 'yellowCards'); if (hy !== undefined) sts.homeYellow = hy;
-    const ay = pick(cur.extAwayId, 'yellowCards'); if (ay !== undefined) sts.awayYellow = ay;
-    const hr = pick(cur.extHomeId, 'redCards'); if (hr !== undefined) sts.homeRed = hr;
-    const ar = pick(cur.extAwayId, 'redCards'); if (ar !== undefined) sts.awayRed = ar;
+    const hc = pick(homeId, 'corners'); if (hc !== undefined) sts.homeCorners = hc;
+    const ac = pick(awayId, 'corners'); if (ac !== undefined) sts.awayCorners = ac;
+    const hy = pick(homeId, 'yellowCards'); if (hy !== undefined) sts.homeYellow = hy;
+    const ay = pick(awayId, 'yellowCards'); if (ay !== undefined) sts.awayYellow = ay;
+    const hr = pick(homeId, 'redCards'); if (hr !== undefined) sts.homeRed = hr;
+    const ar = pick(awayId, 'redCards'); if (ar !== undefined) sts.awayRed = ar;
+    const hp = pick(homeId, 'possession'); if (hp !== undefined) sts.homePossession = hp;
+    const ap = pick(awayId, 'possession'); if (ap !== undefined) sts.awayPossession = ap;
+    const hs = pick(homeId, 'shots'); if (hs !== undefined) sts.homeShots = hs;
+    const as = pick(awayId, 'shots'); if (as !== undefined) sts.awayShots = as;
 
     // Bllokimi i golit: sahere ndryshon score → pezullo bastet (🔒 te frontend,
     // serveri refuzon betet) deri sa te vije push-i i pare me kuota te reja (applyOdds).
@@ -700,7 +737,7 @@ export class LuckyBetFeed implements IFeedProvider {
         awayScore: s2,
         currentMinute: Number.isFinite(minute) ? minute : cur.currentMinute,
         period: st || cur.period,
-        status: ended ? 'ENDED' : notStarted ? 'PREMATCH' : 'LIVE',
+        status: finalStatus,
         isSuspended: scoreChanged ? true : cur.isSuspended,
         ...sts
       }
@@ -710,7 +747,10 @@ export class LuckyBetFeed implements IFeedProvider {
     if (scoreChanged) {
       this.suspendedAt.set(dbId, Date.now());
       console.log(`[LuckyBetFeed] GOL ${cur.homeTeam} ${s1}-${s2} ${cur.awayTeam} → kuotat pezulluar përkohësisht`);
-      for (const cb of this.statusCbs) cb(dbId, 'LIVE', Number.isFinite(minute) ? minute : (cur.currentMinute ?? 0), s1, s2);
+    }
+    if (scoreChanged || statusChanged || minuteChanged) {
+      const liveMin = Number.isFinite(minute) ? minute : (cur.currentMinute ?? 0);
+      for (const cb of this.statusCbs) cb(dbId, finalStatus, liveMin, s1, s2);
     }
     if (ended) await this.endMatch(extId);
   }
@@ -764,8 +804,16 @@ export class LuckyBetFeed implements IFeedProvider {
         marketCount++;
         market = { id, matchId: dbId, extId: groupExtId, name: rawName, marketType, status: 'ACTIVE', outcomes: [] };
         if (groupExtId) byExtId.set(groupExtId, market);
-      } else if (market.status !== 'ACTIVE') {
-        ops.push(() => prisma.market.update({ where: { id: market.id }, data: { status: 'ACTIVE' } }));
+      } else {
+        // Tipi i tregut mund te kete ndryshuar (p.sh. "Match time result" tani eshte
+        // TIME_RESULT, jo 1X2) — mbahet i sinkronizuar, pa krijuar treg te ri.
+        if (market.marketType !== marketType) {
+          ops.push(() => prisma.market.update({ where: { id: market.id }, data: { marketType } }));
+          market.marketType = marketType;
+        }
+        if (market.status !== 'ACTIVE') {
+          ops.push(() => prisma.market.update({ where: { id: market.id }, data: { status: 'ACTIVE' } }));
+        }
       }
 
       // Outcome-et ekzistuese te ketij tregu (in-memory — pa pyetje shtese DB)

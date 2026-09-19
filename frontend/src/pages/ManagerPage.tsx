@@ -10,6 +10,7 @@ import {
   Percent, Scale, AlertCircle, Coins
 } from 'lucide-react';
 import { formatMoney, formatProfitLoss, translateStatus, translateTicketType } from '../utils/format';
+import { marketLabel, outcomeLabel } from '../utils/labels';
 
 interface CommissionTier {
   stake: number;
@@ -42,7 +43,12 @@ interface ManagerStats {
 }
 
 export default function ManagerPage() {
-  const { t } = useLanguage();
+  const { t, tm } = useLanguage();
+
+  /** Emrat e tregjeve/opsioneve vijne ne anglisht nga feed-i -> etiketa shqip. */
+  const lineMarket = (name?: string) => marketLabel(name || '', t, tm);
+  const lineOutcome = (name?: string, market?: string, matchName?: string) =>
+    outcomeLabel(name || '', { marketName: market, teams: String(matchName || '').split(/\s+vs\s+/i) });
   const [tab, setTab] = useState<'users' | 'commission' | 'difference' | 'tickets'>('users');
   const [users, setUsers] = useState<any[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -943,7 +949,10 @@ export default function ManagerPage() {
                                   <div className="space-y-0.5">
                                     <div className="text-text-secondary font-medium">{line.matchName}</div>
                                     <div className="font-semibold text-white">
-                                      {line.marketName}: <span className="text-accent-green font-bold">{line.outcomeName}</span>
+                                      {lineMarket(line.marketName)}:{' '}
+                                      <span className="text-accent-green font-bold">
+                                        {lineOutcome(line.outcomeName, line.marketName, line.matchName)}
+                                      </span>
                                     </div>
                                     {line.match && (
                                       <div className="text-[10px] text-text-secondary">

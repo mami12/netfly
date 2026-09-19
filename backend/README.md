@@ -1,6 +1,6 @@
 # Netfly Sport - Backend Server
 
-Express + Prisma (SQLite) + WebSocket + TypeScript backend API.
+Express + Prisma (PostgreSQL / Supabase) + WebSocket + TypeScript backend API.
 
 ---
 
@@ -44,9 +44,18 @@ Express + Prisma (SQLite) + WebSocket + TypeScript backend API.
 ### Hapi 3: Environment Variables (Variablat e Mjedisit)
 Te seksioni **Environment Variables** në Render, shtoni:
 - `NODE_ENV` = `production`
-- `DATABASE_URL` = `file:./dev.db`
+- `DATABASE_URL` = URL-ja e **Session pooler** nga Supabase (IPv4 — host-i direkt `db.<ref>.supabase.co` është IPv6-only dhe Render nuk lidhet dot):
+  ```env
+  postgresql://postgres.<PROJECT-REF>:<PASSWORD>@aws-<n>-<REGION>.pooler.supabase.com:5432/postgres?sslmode=require&connection_limit=10&pool_timeout=30
+  ```
+  Ku i gjeni vlerat: Supabase Dashboard → **Connect** → *Session pooler* (port 5432).
+  (Shembull për projektin aktual: region `eu-west-1`, prefix `aws-1`.)
 - `JWT_SECRET` = `vendosni_nje_çeles_te_sigurt_kudo_ketu`
 - `CORS_ORIGINS` = `*`
+- `LUCKYBET_PARTNER_ID` = `d3edfa27-7cac-4f77-9e6e-4e2fa2d1ab5f`
+
+> Tabelat krijohen automatikisht: Build Command përfshin `prisma db push` (dhe `db:seed` krijon admin/manager).
+> Nëse ndryshoni `DATABASE_URL` në Render, bëni **Manual Deploy → Deploy latest commit** (ose Clear build cache & deploy).
 
 4. Klikoni **Deploy Web Service**!
 Render do të ndërtojë serverin, do të gjenerojë databazën dhe do të nisë API-n dhe WebSocket-in.

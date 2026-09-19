@@ -61,6 +61,10 @@ export interface Match {
   awayYellow?: number;
   homeRed?: number;
   awayRed?: number;
+  homePossession?: number;
+  awayPossession?: number;
+  homeShots?: number;
+  awayShots?: number;
   tournament?: Tournament & { category?: Category & { sport?: Sport } };
   markets?: Market[];
 }
