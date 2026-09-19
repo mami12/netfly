@@ -14,12 +14,16 @@ const OUTCOME_LIMIT = 12;
 /** Radha e tregjeve kryesore (me të rëndësishmet të parat). */
 const MAIN_ORDER = ['1X2', 'OVER_UNDER', 'BOTH_TEAMS_SCORE', 'DOUBLE_CHANCE', 'HANDICAP', 'TEAM_TOTAL', 'BTTS_TOTAL'];
 
+export const is1X2Market = (m: { marketType?: string; name?: string }) =>
+  m.marketType === '1X2' ||
+  /^(1x2|match winner|match result|full ?time result|rezultati final|rezultati)$/i.test(String(m.name || '').trim());
+
 /** Seksionet e tregjeve — lista e gjere (80+ tregje) organizohet, jo e hedhur rresht.
  *  `labelKey` kalon nga fjalori (i18n `sections.*`), kështu emrat e seksioneve
  *  ndryshohen në një vend të vetëm. `other` i kap të gjitha tregjet e mbetura —
  *  asnjë treg nuk humbet, edhe pse feed-i sjell lloje të reja pa paralajmërim. */
 const SECTIONS: { key: string; labelKey: string; match: (m: Market) => boolean }[] = [
-  { key: 'main', labelKey: 'sections.markets_main', match: (m) => MAIN_ORDER.includes(m.marketType) },
+  { key: 'main', labelKey: 'sections.markets_main', match: (m) => is1X2Market(m) || MAIN_ORDER.includes(m.marketType) },
   { key: 'goals', labelKey: 'sections.markets_goals', match: (m) => ['CORRECT_SCORE', 'EXACT_GOALS', 'ODD_EVEN'].includes(m.marketType) },
   { key: 'time', labelKey: 'sections.markets_time', match: (m) => ['TIME_RESULT', 'INTERVAL_TOTAL'].includes(m.marketType) || /time of|minute|interval/i.test(m.name) },
   { key: 'halves', labelKey: 'sections.markets_halves', match: (m) => m.marketType.startsWith('HALF_') || /1st half|2nd half|halftime/i.test(m.name) },
@@ -125,9 +129,14 @@ export default function MatchDetail() {
 
   const sortMain = (items: Market[]) =>
     [...items].sort((a, b) => {
+      const isA = is1X2Market(a);
+      const isB = is1X2Market(b);
+      if (isA && !isB) return -1;
+      if (!isA && isB) return 1;
       const ia = MAIN_ORDER.indexOf(a.marketType);
       const ib = MAIN_ORDER.indexOf(b.marketType);
-      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+      if (ia !== ib) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+      return (a.sortOrder || 0) - (b.sortOrder || 0);
     });
 
   /** Renditja alfabetike shqipe — e njejta lloj tregjesh qendron bashke. */

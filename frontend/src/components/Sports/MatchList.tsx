@@ -162,16 +162,27 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     const candidates = markets.filter((x: any) => {
       const name = String(x.name || '').trim();
       if (/time result/i.test(name)) return false;
-      return x.marketType === '1X2' || /^(1x2|match winner|match result|full ?time result|result)$/i.test(name);
+      return x.marketType === '1X2' || /^(1x2|match winner|match result|full ?time result|result|rezultati final)$/i.test(name);
     });
-    const mk = candidates.find((x: any) => ((x.outcomes || []).length >= 3)) || candidates[0];
+    const mk = candidates.find((x: any) => ((x.outcomes || []).length === 3)) ||
+               candidates.find((x: any) => ((x.outcomes || []).length >= 3)) ||
+               candidates[0];
     if (!mk) return { market: null, o1: null, oX: null, o2: null };
     const outs: any[] = mk.outcomes || [];
     const byCode = (c: string) => outs.find((o: any) => String(o.code || '').toLowerCase() === c);
     const byName = (re: RegExp) => outs.find((o: any) => re.test(String(o.name || '').trim()));
-    const o1 = byCode('1') || byName(/^1$/) || outs.find((o: any) => o.name === m.homeTeam || (m.homeTeam && o.name?.toLowerCase() === m.homeTeam.toLowerCase()));
-    const oX = byCode('x') || byName(/^(x|draw|barazim)$/i);
-    const o2 = byCode('2') || byName(/^2$/) || outs.find((o: any) => o.name === m.awayTeam || (m.awayTeam && o.name?.toLowerCase() === m.awayTeam.toLowerCase()));
+    let o1 = byCode('1') || byName(/^1$/) || outs.find((o: any) => o.name === m.homeTeam || (m.homeTeam && o.name?.toLowerCase() === m.homeTeam.toLowerCase()));
+    let oX = byCode('x') || byName(/^(x|draw|barazim)$/i);
+    let o2 = byCode('2') || byName(/^2$/) || outs.find((o: any) => o.name === m.awayTeam || (m.awayTeam && o.name?.toLowerCase() === m.awayTeam.toLowerCase()));
+
+    // Fallback inteligjent nese emrat e ekipeve kane dallime te vogla nga burimi
+    if (outs.length === 3) {
+      if (!oX) oX = outs.find((o: any) => /draw|barazim|^x$/i.test(String(o.name || '')));
+      const nonDraw = outs.filter((o: any) => o !== oX);
+      if (!o1 && nonDraw[0]) o1 = nonDraw[0];
+      if (!o2 && nonDraw[1]) o2 = nonDraw[1];
+    }
+
     if (o1 && !o1.code) o1.code = '1';
     if (oX && !oX.code) oX.code = 'x';
     if (o2 && !o2.code) o2.code = '2';
@@ -248,8 +259,8 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
   const renderMatchCard = (m: any) => {
     const { market: market1X2, o1: outcome1, oX: outcomeX, o2: outcome2 } = pick1X2(m);
 
-    // Tregjet dublikate (Early payout) nuk numërohen
-    const totalMarketsCount = (m.markets || []).filter((mk: any) => !/early\s*payout/i.test(mk.name || '')).length;
+    // Numri total i tregjeve nga DB (_count) ose nga array
+    const totalMarketsCount = m._count?.markets ?? (m.markets || []).filter((mk: any) => !/early\s*payout/i.test(mk.name || '')).length;
 
     // Ora e fillimit ne formatin 14:15 (per badge-in LIVE)
     const clockOf = (iso: string) => {
@@ -336,17 +347,32 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
 
           {/* 1X2 Odds Buttons Column */}
           <div className="flex items-center gap-1.5 w-full sm:w-auto">
-            {market1X2 && outcome1 && outcomeX && outcome2 ? (
-              <div className="grid grid-cols-3 gap-1.5 flex-1 sm:w-64 sm:flex-initial">
+            <div className="grid grid-cols-3 gap-1.5 flex-1 sm:w-64 sm:flex-initial">
+              {market1X2 && outcome1 ? (
                 <OddsButton match={m} market={market1X2} outcome={outcome1} />
+              ) : (
+                <div className="bg-primary/50 border border-tertiary/60 rounded-lg py-2 px-1 text-center flex flex-col items-center justify-center min-h-[42px] select-none" title="1">
+                  <span className="text-[10px] text-text-secondary font-bold">1</span>
+                  <span className="text-xs text-text-secondary/40 font-bold">—</span>
+                </div>
+              )}
+              {market1X2 && outcomeX ? (
                 <OddsButton match={m} market={market1X2} outcome={outcomeX} />
+              ) : (
+                <div className="bg-primary/50 border border-tertiary/60 rounded-lg py-2 px-1 text-center flex flex-col items-center justify-center min-h-[42px] select-none" title="X">
+                  <span className="text-[10px] text-text-secondary font-bold">X</span>
+                  <span className="text-xs text-text-secondary/40 font-bold">—</span>
+                </div>
+              )}
+              {market1X2 && outcome2 ? (
                 <OddsButton match={m} market={market1X2} outcome={outcome2} />
-              </div>
-            ) : (
-              <div className="text-xs text-text-secondary italic px-2" title="Kuotat nuk janë ende të disponueshme">
-                —
-              </div>
-            )}
+              ) : (
+                <div className="bg-primary/50 border border-tertiary/60 rounded-lg py-2 px-1 text-center flex flex-col items-center justify-center min-h-[42px] select-none" title="2">
+                  <span className="text-[10px] text-text-secondary font-bold">2</span>
+                  <span className="text-xs text-text-secondary/40 font-bold">—</span>
+                </div>
+              )}
+            </div>
 
             {/* Link to Full Markets */}
             <button

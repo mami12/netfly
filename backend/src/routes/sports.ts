@@ -74,8 +74,13 @@ router.get('/matches', async (req, res) => {
     include: {
       tournament: { include: { category: { include: { sport: true } } } },
       markets: {
-        where: { marketType: '1X2' }, // lista: vetem tregu kryesor (pergjigje e lehte)
-        include: { outcomes: true },
+        where: {
+          OR: [
+            { marketType: '1X2' },
+            { name: { in: ['Full time result', '1X2', 'Match result', 'Match winner', 'Result', 'Rezultati Final'] } }
+          ]
+        },
+        include: { outcomes: { orderBy: { id: 'asc' } } },
         orderBy: { sortOrder: 'asc' }
       },
       _count: { select: { markets: true } } // numri total per butonin "+N"
@@ -196,6 +201,13 @@ router.get('/matches/:id', async (req, res) => {
       seen.set(norm, m);
     }
   }
+  cleanMarkets.sort((a, b) => {
+    const is1X2A = a.marketType === '1X2' || /^(1x2|match winner|match result|full ?time result|result)$/i.test(a.name || '');
+    const is1X2B = b.marketType === '1X2' || /^(1x2|match winner|match result|full ?time result|result)$/i.test(b.name || '');
+    if (is1X2A && !is1X2B) return -1;
+    if (!is1X2A && is1X2B) return 1;
+    return (a.sortOrder || 0) - (b.sortOrder || 0);
+  });
   (match as any).markets = cleanMarkets;
   matchDetailCache.set(matchId, { data: match, ts: Date.now() });
   res.json(match);

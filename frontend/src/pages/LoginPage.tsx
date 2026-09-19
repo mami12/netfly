@@ -17,7 +17,7 @@ export default function LoginPage() {
       await login(username, password);
       navigate('/');
     } catch (err: any) {
-      setError(err.response?.data?.message || t('auth.login_failed'));
+      setError(err.response?.data?.message || err.response?.data?.error || t('auth.login_failed'));
     }
   };
 

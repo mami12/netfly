@@ -55,15 +55,16 @@ function marketTypeOf(name: string): string {
   if (n.includes('exact number of goals')) return 'EXACT_GOALS';
   if (n.includes('odd/even') || n.includes('even/odd')) return 'ODD_EVEN';
   // "Match time result" = kush eshte duke fituar ne minutën X — NUK eshte 1X2
-  if (n.includes('match time result')) return 'TIME_RESULT';
+  if (n.includes('match time result') || n.includes('time result')) return 'TIME_RESULT';
   // "Total from 1 to 10 minute" = gola brenda nje intervali kohe — NUK eshte total ekipi
-  if (/from \d+ to \d+ minute/.test(n)) return 'INTERVAL_TOTAL';
+  if (/from \d+ to \d+ minute/.test(n) || /\bminute\b/.test(n)) return 'INTERVAL_TOTAL';
   if (n.includes('handicap')) return 'HANDICAP';
   if (n.includes('total')) {
     if (n.startsWith('total') || n.startsWith('over') || n.startsWith('under')) return 'OVER_UNDER';
     return 'TEAM_TOTAL';
   }
-  if (n.includes('result')) return '1X2';
+  if (n.includes('foul')) return 'STATS_OTHER';
+  if (n.includes('result') || n === '1x2' || n.includes('winner') || n.includes('match winner')) return '1X2';
   return 'OTHER';
 }
 
@@ -866,10 +867,11 @@ export class LuckyBetFeed implements IFeedProvider {
           }
         }
       }
+      const targetSortOrder = marketType === '1X2' ? 0 : (10 + marketCount);
       if (!market) {
         const id = randomUUID();
         ops.push(() => prisma.market.create({
-          data: { id, matchId: dbId, extId: groupExtId, marketType, name: rawName, status: 'ACTIVE', sortOrder: 10 + marketCount }
+          data: { id, matchId: dbId, extId: groupExtId, marketType, name: rawName, status: 'ACTIVE', sortOrder: targetSortOrder }
         }));
         marketCount++;
         market = { id, matchId: dbId, extId: groupExtId, name: rawName, marketType, status: 'ACTIVE', outcomes: [] };
@@ -878,7 +880,7 @@ export class LuckyBetFeed implements IFeedProvider {
         // Tipi i tregut mund te kete ndryshuar (p.sh. "Match time result" tani eshte
         // TIME_RESULT, jo 1X2) — mbahet i sinkronizuar, pa krijuar treg te ri.
         if (market.marketType !== marketType) {
-          ops.push(() => prisma.market.update({ where: { id: market.id }, data: { marketType } }));
+          ops.push(() => prisma.market.update({ where: { id: market.id }, data: { marketType, sortOrder: targetSortOrder } }));
           market.marketType = marketType;
         }
         if (market.status !== 'ACTIVE') {
