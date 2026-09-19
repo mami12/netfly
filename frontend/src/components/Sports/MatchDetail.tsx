@@ -8,7 +8,7 @@ import PitchTracker from '../Tracker/PitchTracker';
 import { useLanguage } from '../../context/LanguageContext';
 import { marketLabel, outcomeLabel, minuteLabel, periodLabel, formatKickoff, kickoffLabel, matchTimeLabel, isUnnamedMarket } from '../../utils/labels';
 
-const POLL_MS = 12000;
+const POLL_MS = 5000;
 const OUTCOME_LIMIT = 12;
 
 /** Radha e tregjeve kryesore (me të rëndësishmet të parat). */
@@ -37,6 +37,7 @@ export default function MatchDetail() {
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(['main']));
   const [showAllSections, setShowAllSections] = useState(false);
   const [expandedOutcomes, setExpandedOutcomes] = useState<Set<string>>(new Set());
+  const [, setTick] = useState(0);
 
   useEffect(() => {
     if (!id) return;
@@ -72,8 +73,33 @@ export default function MatchDetail() {
     };
 
     load();
-    const timer = setInterval(load, POLL_MS); // statuset + kuotat rifreskohen vete
-    return () => { alive = false; clearInterval(timer); };
+    const timer = setInterval(load, POLL_MS); // statuset + kuotat rifreskohen cdo 5s
+    const tickTimer = setInterval(() => setTick((v) => v + 1), 15000); // minuta ecen live
+
+    const handleStatus = (e: any) => {
+      const { matchId, status, minute, homeScore, awayScore } = e.detail || {};
+      if (matchId === id) {
+        setMatch((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: status || prev.status,
+                currentMinute: minute !== undefined ? minute : prev.currentMinute,
+                homeScore: homeScore !== undefined ? homeScore : prev.homeScore,
+                awayScore: awayScore !== undefined ? awayScore : prev.awayScore
+              }
+            : prev
+        );
+      }
+    };
+    window.addEventListener('netfly:match-status', handleStatus);
+
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      clearInterval(tickTimer);
+      window.removeEventListener('netfly:match-status', handleStatus);
+    };
   }, [id]);
 
   // Klasifikimi i tregjeve ne seksione (seksioni i pare qe perputhet fiton)
@@ -370,7 +396,7 @@ export default function MatchDetail() {
 
         {markets.length === 0 && (
           <div className="p-8 text-center text-text-secondary text-sm">
-            {t('sections.odds_loading')}
+            {match?.status === 'ENDED' ? 'Kjo ndeshje ka përfunduar.' : t('sections.odds_loading')}
           </div>
         )}
       </div>

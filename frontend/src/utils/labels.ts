@@ -235,17 +235,21 @@ export function minuteLabel(m: { currentMinute?: number; period?: string | null;
     if (p.includes('end') || p.includes('finish')) return 'Përfundoi';
   }
 
-  if (min > 0) return `${Math.min(120, Math.round(min))}'`;
-
-  // Feed-i nuk dërgon minutë -> llogaritet nga ora e fillimit (KURRË "0'")
+  // Llogaritje dinamike nga koha reale e fillimit (minuta ecën vetë, nuk mbetet kurrë te 2')
   if (m?.startTime) {
     const started = new Date(m.startTime).getTime();
     if (Number.isFinite(started)) {
       const elapsed = Math.floor((Date.now() - started) / 60000);
-      if (elapsed >= 1 && elapsed <= 120) return `${elapsed}'`;
+      if (elapsed > 125) return 'Përfundoi';
+      if (elapsed >= 1) {
+        const liveVal = Math.max(elapsed, Number(m?.currentMinute || 0));
+        return `${Math.min(120, liveVal)}'`;
+      }
       if (elapsed <= 0) return 'Nis tani';
     }
   }
+
+  if (min > 0) return `${Math.min(120, Math.round(min))}'`;
 
   if (p) return periodLabel(p); // "Pjesa 1" / "Pjesa 2"
   return 'Në vazhdim';

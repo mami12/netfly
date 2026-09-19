@@ -20,6 +20,9 @@ router.get('/sports/tree', async (req, res) => {
   res.json(sports);
 });
 
+const cleanTeamName = (s: string) =>
+  String(s || '').toLowerCase().replace(/[\s\.\-_]/g, '').replace(/fc|sc|cf|ac|as|fk/g, '');
+
 router.get('/matches', async (req, res) => {
   const { tournamentId, sportId, categoryId, status } = req.query;
   const whereClause: any = {};
@@ -37,7 +40,7 @@ router.get('/matches', async (req, res) => {
     whereClause.status = { in: ['PREMATCH', 'LIVE'] };
   }
 
-  const matches = await prisma.match.findMany({
+  const rawMatches = await prisma.match.findMany({
     where: whereClause,
     include: {
       tournament: { include: { category: { include: { sport: true } } } },
@@ -54,7 +57,55 @@ router.get('/matches', async (req, res) => {
       { startTime: 'asc' }
     ]
   });
-  res.json(matches);
+
+  const now = Date.now();
+  const validMatches: typeof rawMatches = [];
+
+  for (const m of rawMatches) {
+    const h = (m.homeTeam || '').toLowerCase();
+    const a = (m.awayTeam || '').toLowerCase();
+    // Filtro outrights (bastet e fituesit te kampionatit qe feed-i i nxjerr gabimisht si ndeshje)
+    if (h.includes('outright') || a.includes('outright') || h.includes('winner') || a.includes('winner')) {
+      continue;
+    }
+
+    // Ndeshjet LIVE: llogarit minutën reale dhe mbyll ato që kanë kaluar > 130 minuta
+    if (m.status === 'LIVE' && m.startTime) {
+      const elapsed = Math.floor((now - new Date(m.startTime).getTime()) / 60000);
+      if (elapsed > 130) {
+        // Ndeshja ka perfunduar ne realitet
+        prisma.match.update({ where: { id: m.id }, data: { status: 'ENDED', currentMinute: 90 } }).catch(() => {});
+        continue;
+      }
+      if (elapsed >= 1) {
+        m.currentMinute = Math.min(120, Math.max(m.currentMinute || 0, elapsed));
+      }
+    }
+
+    validMatches.push(m);
+  }
+
+  // Deduplikimi i ndeshjeve (kur feed-i dergon te njejten ndeshje dy here me kuota te ndryshme)
+  const matchMap = new Map<string, typeof rawMatches[0]>();
+  for (const m of validMatches) {
+    const key = `${cleanTeamName(m.homeTeam)}:::${cleanTeamName(m.awayTeam)}`;
+    const existing = matchMap.get(key);
+    if (!existing) {
+      matchMap.set(key, m);
+    } else {
+      // Nese njera eshte LIVE dhe tjetra PREMATCH -> zgjidh LIVE
+      if (existing.status !== 'LIVE' && m.status === 'LIVE') {
+        matchMap.set(key, m);
+      } else if (existing.status === m.status) {
+        // Nese kane te njejtin status -> zgjidh ate me me shume tregje/kuota
+        if ((m._count?.markets || 0) > (existing._count?.markets || 0)) {
+          matchMap.set(key, m);
+        }
+      }
+    }
+  }
+
+  res.json(Array.from(matchMap.values()));
 });
 
 router.get('/sports/:sportId/matches', async (req, res) => {
@@ -80,6 +131,17 @@ router.get('/matches/:id', async (req, res) => {
     }
   });
   if (!match) return res.status(404).json({ error: 'Match not found' });
+
+  // Ndeshjet LIVE: llogaritje dinamike e minutës nga ora e fillimit
+  if (match.status === 'LIVE' && match.startTime) {
+    const elapsed = Math.floor((Date.now() - new Date(match.startTime).getTime()) / 60000);
+    if (elapsed > 130) {
+      match.status = 'ENDED';
+      prisma.match.update({ where: { id: match.id }, data: { status: 'ENDED', currentMinute: 90 } }).catch(() => {});
+    } else if (elapsed >= 1) {
+      match.currentMinute = Math.min(120, Math.max(match.currentMinute || 0, elapsed));
+    }
+  }
 
   // Deduplicate markets by normalized name, preference for market with more outcomes
   const seen = new Map<string, any>();

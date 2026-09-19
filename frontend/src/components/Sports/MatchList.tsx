@@ -42,9 +42,12 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     }
   };
 
+  const [, setTick] = useState(0);
+
   useEffect(() => {
     fetchMatches();
     const interval = setInterval(fetchMatches, 15000); // refresh every 15s
+    const tickInterval = setInterval(() => setTick((v) => v + 1), 15000); // minuta ecen live ne ekran
 
     const handleStatus = (e: any) => {
       const { matchId, status, minute, homeScore, awayScore } = e.detail || {};
@@ -65,23 +68,31 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
 
     return () => {
       clearInterval(interval);
+      clearInterval(tickInterval);
       window.removeEventListener('netfly:match-status', handleStatus);
     };
   }, [tournamentId, categoryId, sportId, isLiveOnly]);
 
-  // Filter matches by search term
-  const searchFiltered = searchTerm.trim()
-    ? matches.filter(m => {
-        const search = searchTerm.toLowerCase();
-        return (
-          m.homeTeam?.toLowerCase().includes(search) ||
-          m.awayTeam?.toLowerCase().includes(search) ||
-          m.tournament?.name?.toLowerCase().includes(search) ||
-          m.tournament?.category?.name?.toLowerCase().includes(search) ||
-          m.tournament?.category?.sport?.name?.toLowerCase().includes(search)
-        );
-      })
-    : matches;
+  const cleanTeam = (s: string) =>
+    String(s || '').toLowerCase().replace(/[\s\.\-_]/g, '').replace(/fc|sc|cf|ac|as|fk/g, '');
+
+  // Filter matches by search term and remove fake outrights
+  const searchFiltered = matches.filter(m => {
+    const h = (m.homeTeam || '').toLowerCase();
+    const a = (m.awayTeam || '').toLowerCase();
+    if (h.includes('outright') || a.includes('outright') || h.includes('winner') || a.includes('winner')) {
+      return false;
+    }
+    if (!searchTerm.trim()) return true;
+    const search = searchTerm.toLowerCase();
+    return (
+      m.homeTeam?.toLowerCase().includes(search) ||
+      m.awayTeam?.toLowerCase().includes(search) ||
+      m.tournament?.name?.toLowerCase().includes(search) ||
+      m.tournament?.category?.name?.toLowerCase().includes(search) ||
+      m.tournament?.category?.sport?.name?.toLowerCase().includes(search)
+    );
+  });
 
   // Filter matches by date (Today / Tomorrow)
   const filteredMatches = searchFiltered.filter(m => {
@@ -103,8 +114,23 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     return true;
   });
 
-  const liveMatches = filteredMatches.filter(m => m.status === 'LIVE');
-  const prematchMatches = filteredMatches.filter(m => m.status !== 'LIVE');
+  // Deduplikimi i ndeshjeve të dyfishta (LIVE ka përparësi ndaj PREMATCH)
+  const uniqueMatches: typeof matches = [];
+  const seenPairs = new Set<string>();
+  const sortedCandidates = [...filteredMatches].sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'LIVE' ? -1 : 1;
+    return (b.markets?.length || 0) - (a.markets?.length || 0);
+  });
+  for (const m of sortedCandidates) {
+    const key = `${cleanTeam(m.homeTeam)}:::${cleanTeam(m.awayTeam)}`;
+    if (!seenPairs.has(key)) {
+      seenPairs.add(key);
+      uniqueMatches.push(m);
+    }
+  }
+
+  const liveMatches = uniqueMatches.filter(m => m.status === 'LIVE');
+  const prematchMatches = uniqueMatches.filter(m => m.status !== 'LIVE');
 
   if (loading && matches.length === 0) {
     return (

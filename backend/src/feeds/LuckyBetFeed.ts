@@ -110,7 +110,7 @@ export class LuckyBetFeed implements IFeedProvider {
   private oddsQueue = new Map<string, Promise<void>>();
   // Kufi global: sa detyra njekohesisht prekin DB-ne. Pa te, qindra snapshot-e
   // e mbushin pool-in e lidhjeve (limit 5) dhe te gjitha deshtojne me timeout.
-  private static readonly MAX_DB_TASKS = 3;
+  private static readonly MAX_DB_TASKS = 5;
   private dbActive = 0;
   private dbWaiters: (() => void)[] = [];
   private lastNamesLoad = 0;
@@ -207,6 +207,11 @@ export class LuckyBetFeed implements IFeedProvider {
       const catId = Number(it.category?.id || 0);
       const catSlug = this.catSlugs.get(catId) || String(it.category?.slug || '');
       if (isVirtualSlug(catSlug)) continue; // cyberfifa/replays/esports -> HUQ (pa simulime)
+
+      const homeName = String(it.homeTeam?.name || it.home || '').toLowerCase();
+      const awayName = String(it.awayTeam?.name || it.away || '').toLowerCase();
+      if (homeName.includes('outright') || awayName.includes('outright') || homeName.includes('winner') || awayName.includes('winner')) continue;
+
       const id = Number(it.id);
       keep.add(id);
       if (String(it.service || '').toUpperCase() === 'LIVE') liveNew.push(id);
@@ -231,25 +236,28 @@ export class LuckyBetFeed implements IFeedProvider {
     // Ndeshjet qe ra nga lista -> mbylli me score-in e fundit te njohur
     const open = await prisma.match.findMany({
       where: { id: { startsWith: 'lb-' }, status: { in: ['PREMATCH', 'LIVE'] } },
-      select: { id: true }
+      select: { id: true, status: true, startTime: true }
     });
+    const nowTs = Date.now();
     for (const m of open) {
       const ext = Number(m.id.slice(3));
-      if (Number.isFinite(ext) && !keep.has(ext)) await this.endMatch(ext);
+      // Mbyll nese nuk eshte me ne feed OSE nese eshte LIVE por ka kaluar 130 min nga nisja
+      const isExpiredLive = m.status === 'LIVE' && m.startTime && (nowTs - m.startTime.getTime() > 130 * 60 * 1000);
+      if (Number.isFinite(ext) && (!keep.has(ext) || isExpiredLive)) {
+        await this.endMatch(ext);
+      }
     }
     console.log(`[LuckyBetFeed] Sync: ${keep.size} ndeshje futbolli reale (${liveNew.length} live).`);
 
-    // Rrjetë sigurie për minutat: ndeshjet LIVE që nuk kanë marrë kurrë
-    // informacion nga feed-i qëndronin në "0'" në faqe. Një pyetje e vetme i
-    // mbush minutat nga ora e fillimit (vlera e feed-it nuk preket kurre).
+    // Përditëso minutat dinamikisht për TË GJITHA ndeshjet LIVE që luhen aktualisht
     try {
       const fixed = await prisma.$executeRaw`
         UPDATE "Match"
         SET "currentMinute" = LEAST(120, GREATEST(1, FLOOR(EXTRACT(EPOCH FROM (NOW() - "startTime")) / 60)::int))
-        WHERE "status" = 'LIVE' AND "currentMinute" = 0 AND "startTime" < NOW()`;
-      if (fixed > 0) console.log(`[LuckyBetFeed] Minutat u mbushën automatikisht për ${fixed} ndeshje live.`);
+        WHERE "status" = 'LIVE' AND "startTime" < NOW() AND "startTime" > NOW() - INTERVAL '135 minutes'`;
+      if (fixed > 0) console.log(`[LuckyBetFeed] Minutat u sinkronizuan për ${fixed} ndeshje live.`);
     } catch (e: any) {
-      console.error('[LuckyBetFeed] Mbushja e minutave dështoi:', e?.message);
+      console.error('[LuckyBetFeed] Sinkronizimi i minutave dështoi:', e?.message);
     }
 
     // Rrjetë sigurie: nëse pas një goli feed-i nuk dërgoi kuota të reja, ç-pezullo pas 25s
@@ -578,9 +586,11 @@ export class LuckyBetFeed implements IFeedProvider {
       if (!msg || typeof msg.messageType !== 'string') return;
 
       if (msg.messageType === 'match-odds-snapshot' || msg.messageType === 'match-odds') {
-        this.enqueue('odds', () => this.applyOdds(msg.data || {}), 'applyOdds');
+        const mid = msg.data?.matchId ? `match-${msg.data.matchId}` : 'odds';
+        this.enqueue(mid, () => this.applyOdds(msg.data || {}), 'applyOdds');
       } else if (msg.messageType === 'match-info-snapshot' || msg.messageType === 'match-info') {
-        this.enqueue('info', () => this.applyInfo(msg.data || {}), 'applyInfo');
+        const mid = msg.data?.matchId ? `match-${msg.data.matchId}` : 'info';
+        this.enqueue(mid, () => this.applyInfo(msg.data || {}), 'applyInfo');
       }
     });
     ws.on('close', reconnect);
