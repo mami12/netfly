@@ -9,12 +9,14 @@ interface ClientState {
 export class WSService {
   private wss: WebSocketServer;
   private clients: Map<WebSocket, ClientState> = new Map();
+  private countListeners: ((count: number) => void)[] = [];
 
   constructor(server: Server) {
     this.wss = new WebSocketServer({ server });
 
     this.wss.on('connection', (ws: WebSocket) => {
       this.clients.set(ws, { ws, channels: new Set() });
+      this.notifyCount();
 
       ws.on('message', (message: string) => {
         try {
@@ -30,8 +32,24 @@ export class WSService {
 
       ws.on('close', () => {
         this.clients.delete(ws);
+        this.notifyCount();
       });
     });
+  }
+
+  onClientCountChange(cb: (count: number) => void) {
+    this.countListeners.push(cb);
+  }
+
+  getClientCount(): number {
+    return this.clients.size;
+  }
+
+  private notifyCount() {
+    const c = this.clients.size;
+    for (const cb of this.countListeners) {
+      try { cb(c); } catch {}
+    }
   }
 
   broadcast(channel: string, message: any) {

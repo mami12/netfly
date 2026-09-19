@@ -111,13 +111,62 @@ export class LuckyBetFeed implements IFeedProvider {
   // Kufi global: sa detyra njekohesisht prekin DB-ne. Pa te, qindra snapshot-e
   // e mbushin pool-in e lidhjeve (limit 5) dhe te gjitha deshtojne me timeout.
   private static readonly MAX_DB_TASKS = 5;
+  private static readonly IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 3 minuta pa aktivitet -> Sleep Mode
   private dbActive = 0;
   private dbWaiters: (() => void)[] = [];
   private lastNamesLoad = 0;
 
+  // Gjendja e gjumit dhe gjurmimi i përdoruesve online
+  private isSleeping = false;
+  private lastActiveTs = Date.now();
+  private activeUsersCount = 0;
+  private idleCheckTimer: NodeJS.Timeout | null = null;
+
   private oddsCbs: ((delta: OddsDelta) => void)[] = [];
   private statusCbs: ((matchId: string, status: string, minute: number, homeScore: number, awayScore: number) => void)[] = [];
   private matchEventCbs: ((event: MatchEvent) => void)[] = [];
+
+  /** Sinjalizon aktivitet përdoruesi (kërkesë HTTP ose lidhje WebSocket) */
+  touch() {
+    this.lastActiveTs = Date.now();
+    if (this.isSleeping) {
+      this.wakeUp();
+    }
+  }
+
+  /** Përditëson numrin e lojtarëve online në kohë reale */
+  setActiveUsers(count: number) {
+    this.activeUsersCount = Math.max(0, count);
+    if (this.activeUsersCount > 0) {
+      this.touch();
+    }
+  }
+
+  /** Kalon feed-in në gjumë: ndalon pyetjet në API dhe shkëput WS me LuckyBet */
+  sleep() {
+    if (this.isSleeping) return;
+    this.isSleeping = true;
+    console.log('[LuckyBetFeed] Asnjë përdorues aktiv prej 3 minutash -> Feed-i kalon në SLEEP MODE (pa kërkesa API).');
+    if (this.syncTimer) { clearInterval(this.syncTimer); this.syncTimer = null; }
+    if (this.subTimer) { clearInterval(this.subTimer); this.subTimer = null; }
+    if (this.ws) {
+      try { this.ws.close(); } catch {}
+      this.ws = null;
+    }
+  }
+
+  /** Zgjon menjëherë feed-in dhe rinis transmetimin live */
+  wakeUp() {
+    if (!this.isSleeping && this.running && this.ws) return;
+    this.isSleeping = false;
+    this.lastActiveTs = Date.now();
+    console.log('[LuckyBetFeed] Lojtar aktiv u detektua -> Feed-i u ZGJUA menjëherë (Wake Up)!');
+    this.connectWs();
+    if (!this.syncTimer) {
+      this.syncTimer = setInterval(() => this.sync().catch((e) => console.error('[LuckyBetFeed] sync:', e)), 60 * 1000);
+    }
+    this.sync().catch(() => {});
+  }
 
   start() {
     this.running = true;
@@ -134,10 +183,19 @@ export class LuckyBetFeed implements IFeedProvider {
     this.sync().catch((e) => console.error('[LuckyBetFeed] sync fillestar deshtoi:', e));
     this.syncTimer = setInterval(() => this.sync().catch((e) => console.error('[LuckyBetFeed] sync:', e)), 60 * 1000);
     this.connectWs();
+
+    // Kontrollon çdo 30 sekonda nëse nuk ka asnjë lojtar aktiv prej 3 minutash -> sleep
+    this.idleCheckTimer = setInterval(() => {
+      if (!this.running || this.isSleeping) return;
+      if (this.activeUsersCount === 0 && Date.now() - this.lastActiveTs > LuckyBetFeed.IDLE_TIMEOUT_MS) {
+        this.sleep();
+      }
+    }, 30 * 1000);
   }
 
   stop() {
     this.running = false;
+    if (this.idleCheckTimer) { clearInterval(this.idleCheckTimer); this.idleCheckTimer = null; }
     if (this.syncTimer) { clearInterval(this.syncTimer); this.syncTimer = null; }
     if (this.subTimer) { clearInterval(this.subTimer); this.subTimer = null; }
     if (this.ws) { try { this.ws.close(); } catch { /* ignore */ } this.ws = null; }
@@ -185,6 +243,7 @@ export class LuckyBetFeed implements IFeedProvider {
   }
 
   private async doSync() {
+    if (this.isSleeping) return;
     const [live, pre] = await Promise.all([
       api('/matches/get-many', { sportId: 18, service: 'live', limit: 2000 }),
       api('/matches/get-many', { sportId: 18, service: 'prematch', limit: 2000 })
@@ -566,8 +625,10 @@ export class LuckyBetFeed implements IFeedProvider {
     const url = `wss://${HOST}/push-server-v2/?Language=${LANG}&externalPartnerId=${PARTNER}&EIO=4&transport=websocket`;
     const reconnect = () => {
       this.ws = null;
-      if (!this.running) return;
-      setTimeout(() => this.connectWs(), 5000);
+      if (!this.running || this.isSleeping) return;
+      setTimeout(() => {
+        if (!this.isSleeping && this.running) this.connectWs();
+      }, 5000);
     };
     const ws: WebSocket = new WebSocket(url, { headers: { Origin: 'https://bitgames6205.com' } });
     this.ws = ws;
@@ -613,6 +674,7 @@ export class LuckyBetFeed implements IFeedProvider {
    * Dritarja rrotullohet, keshtu qe me kalimin e kohes te gjitha marrin kuota.
    */
   private subscribeCycle() {
+    if (this.isSleeping) return;
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 

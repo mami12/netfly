@@ -11,12 +11,26 @@ import { auth, requireAdmin } from './middleware/auth';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
 import managerRoutes from './routes/manager';
-import sportsRoutes from './routes/sports';
+import sportsRoutes, { clearMatchesCache } from './routes/sports';
 import betsRoutes from './routes/bets';
 
 const app = express();
 const server = createServer(app);
 const wsService = new WSService(server);
+
+// Feed-i i vetëm: futboll real nga LuckyBet (pa simulime)
+const feed = new LuckyBetFeed();
+
+// Çdo kërkesë HTTP nga përdoruesi zgjon dhe mban zgjuar feed-in
+app.use((req, res, next) => {
+  feed.touch();
+  next();
+});
+
+// Kur lidhen/shkëputen përdorues në WebSocket, feed-i e di në kohë reale
+wsService.onClientCountChange((count) => {
+  feed.setActiveUsers(count);
+});
 
 app.use(cors());
 app.use(helmet());
@@ -33,16 +47,15 @@ app.use('/api/manager', auth, managerRoutes);
 app.use('/api', sportsRoutes); // sports, matches, booking (publicly viewable)
 app.use('/api/bets', betsRoutes);
 
-// Feed-i i vetëm: futboll real nga LuckyBet (pa simulime)
-const feed = new LuckyBetFeed();
-
 feed.onOddsUpdate((delta) => {
+  clearMatchesCache();
   wsService.broadcast('odds', delta);
 });
 feed.onMatchEvent((event) => {
   wsService.broadcast(`match:${event.matchId}`, event);
 });
 feed.onMatchStatusChange((matchId, status, minute, homeScore, awayScore) => {
+  clearMatchesCache(matchId);
   wsService.broadcast('matches', { type: 'STATUS', matchId, status, minute, homeScore, awayScore });
   wsService.broadcast(`match:${matchId}`, { type: 'STATUS', matchId, status, minute, homeScore, awayScore });
 });

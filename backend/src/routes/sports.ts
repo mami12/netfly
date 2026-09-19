@@ -20,11 +20,41 @@ router.get('/sports/tree', async (req, res) => {
   res.json(sports);
 });
 
+// Universal Shared Memory Cache
+// Kur 100 lojtarë janë online, ata marrin të njëjtin rezultat nga RAM-i në 1ms
+// pa bërë 100 pyetje në bazën e të dhënave ose në API
+interface CacheEntry {
+  data: any;
+  ts: number;
+}
+const matchesCache = new Map<string, CacheEntry>();
+const matchDetailCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 3000; // 3 sekonda
+const DETAIL_TTL_MS = 2500; // 2.5 sekonda
+
+export function clearMatchesCache(matchId?: string) {
+  matchesCache.clear();
+  if (matchId) {
+    matchDetailCache.delete(matchId);
+  } else {
+    matchDetailCache.clear();
+  }
+}
+
 const cleanTeamName = (s: string) =>
   String(s || '').toLowerCase().replace(/[\s\.\-_]/g, '').replace(/fc|sc|cf|ac|as|fk/g, '');
 
 router.get('/matches', async (req, res) => {
   const { tournamentId, sportId, categoryId, status } = req.query;
+  const cacheKey = JSON.stringify({ tournamentId, sportId, categoryId, status });
+  const cached = matchesCache.get(cacheKey);
+  const now = Date.now();
+
+  // Nëse ka të dhëna të freskëta në RAM (< 3s), ktheji direkt për të gjithë lojtarët
+  if (cached && now - cached.ts < CACHE_TTL_MS) {
+    return res.json(cached.data);
+  }
+
   const whereClause: any = {};
 
   if (tournamentId) {
@@ -58,7 +88,6 @@ router.get('/matches', async (req, res) => {
     ]
   });
 
-  const now = Date.now();
   const validMatches: typeof rawMatches = [];
 
   for (const m of rawMatches) {
@@ -105,7 +134,9 @@ router.get('/matches', async (req, res) => {
     }
   }
 
-  res.json(Array.from(matchMap.values()));
+  const result = Array.from(matchMap.values());
+  matchesCache.set(cacheKey, { data: result, ts: now });
+  res.json(result);
 });
 
 router.get('/sports/:sportId/matches', async (req, res) => {
@@ -121,8 +152,15 @@ router.get('/sports/:sportId/matches', async (req, res) => {
 });
 
 router.get('/matches/:id', async (req, res) => {
+  const matchId = req.params.id;
+  const cached = matchDetailCache.get(matchId);
+  const now = Date.now();
+  if (cached && now - cached.ts < DETAIL_TTL_MS) {
+    return res.json(cached.data);
+  }
+
   const match = await prisma.match.findUnique({
-    where: { id: req.params.id },
+    where: { id: matchId },
     include: {
       markets: {
         include: { outcomes: { orderBy: { id: 'asc' } } },
@@ -160,6 +198,7 @@ router.get('/matches/:id', async (req, res) => {
     }
   }
   (match as any).markets = cleanMarkets;
+  matchDetailCache.set(matchId, { data: match, ts: Date.now() });
   res.json(match);
 });
 
