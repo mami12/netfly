@@ -1,25 +1,24 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET, JWT_EXPIRES_IN } from '../config';
 import { auth, AuthRequest } from '../middleware/auth';
+import { prisma } from '../db';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
   
   const user = await prisma.user.findUnique({ where: { username } });
-  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!user) return res.status(401).json({ error: 'Invalid credentials', message: 'Përdoruesi nuk ekziston ose fjalëkalimi është i gabuar' });
   
   if (user.status === 'BANNED' || user.status === 'FROZEN') {
-    return res.status(403).json({ error: 'Account is locked' });
+    return res.status(403).json({ error: 'Account is locked', message: 'Llogaria juaj është e bllokuar' });
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+  if (!valid) return res.status(401).json({ error: 'Invalid credentials', message: 'Përdoruesi nuk ekziston ose fjalëkalimi është i gabuar' });
 
   const token = jwt.sign(
     { userId: user.id, username: user.username, role: user.role },

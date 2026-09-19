@@ -1,10 +1,8 @@
 import { IFeedProvider, MatchEvent, OddsDelta, PitchState } from './IFeedProvider';
-import { PrismaClient } from '@prisma/client';
 import WebSocket from 'ws';
 import { randomUUID } from 'crypto';
 import { BetSettler } from '../services/betSettler';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db';
 const PARTNER = process.env.LUCKYBET_PARTNER_ID || 'd3edfa27-7cac-4f77-9e6e-4e2fa2d1ab5f';
 const HOST = process.env.LUCKYBET_API_HOST || 'api-gateway.gw-lucky-bet.com';
 const LANG = process.env.LUCKYBET_LANGUAGE || 'en-001';

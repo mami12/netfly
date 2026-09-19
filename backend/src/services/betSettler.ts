@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client';
 import { WalletService } from './walletService';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db';
 
 /** Heq aksente + lowercase për krahasim emrash (Südtirol == sudtirol). */
 const norm = (s: string) =>

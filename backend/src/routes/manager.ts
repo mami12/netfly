@@ -1,11 +1,10 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { WalletService } from '../services/walletService';
 import { AuthRequest, auth, requireManager } from '../middleware/auth';
+import { prisma } from '../db';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Get stats for this manager (including commission and difference breakdown)
 router.get('/stats', auth, requireManager, async (req: AuthRequest, res) => {

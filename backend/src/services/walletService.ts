@@ -1,6 +1,4 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db';
 
 export class WalletService {
   static async deposit(userId: string, amount: number, description?: string) {

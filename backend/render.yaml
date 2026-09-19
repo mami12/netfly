@@ -13,8 +13,8 @@ services:
       - key: PORT
         value: 10000
       # Baza Postgres (Supabase): vendoset si env var DATABASE_URL në dashboardin e Render-it.
-      # Duhet të jetë URL-ja e "Session pooler" (IPv4!) — host-i direkt db.<ref>.supabase.co shtë IPv6-only:
-      # postgresql://postgres.<ref>:<PASSWORD>@aws-<n>-<region>.pooler.supabase.com:5432/postgres?sslmode=require&connection_limit=10&pool_timeout=30
+      # Duhet të jetë URL-ja e "Transaction pooler" (port 6543, pgbouncer=true, IPv4!):
+      # postgresql://postgres.<ref>:<PASSWORD>@aws-<n>-<region>.pooler.supabase.com:6543/postgres?sslmode=require&pgbouncer=true&connection_limit=5&pool_timeout=20
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET

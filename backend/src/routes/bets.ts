@@ -1,11 +1,10 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { WalletService } from '../services/walletService';
 import { AuthRequest, auth } from '../middleware/auth';
 import { v4 as uuidv4 } from 'uuid';
+import { prisma } from '../db';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 const generateBookingCode = () => uuidv4().substring(0, 6).toUpperCase();
 
