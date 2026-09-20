@@ -896,13 +896,16 @@ export class LuckyBetFeed implements IFeedProvider {
     const groups: Dict[] = (d.oddsGroups || []) as Dict[];
     const deltas: { outcomeId: string; oldOdds: number; newOdds: number; status: string }[] = [];
 
-    // 1) Ngarko ekzistueset me NJE pyetje (jo nje pyetje per çdo outcome!)
     const existingMarkets = await prisma.market.findMany({
       where: { matchId: dbId },
       include: { outcomes: { select: { id: true, name: true, odds: true, code: true, status: true } } }
     });
-    const byExtId = new Map<string, any>(existingMarkets.filter((m) => m.extId).map((m) => [m.extId as string, m]));
-    const byName = new Map<string, any>(existingMarkets.filter((m) => !m.extId).map((m) => [m.name, m]));
+    const byExtId = new Map<string, any>();
+    const byName = new Map<string, any>();
+    for (const m of existingMarkets) {
+      if (m.extId) byExtId.set(String(m.extId), m);
+      if (m.name) byName.set(String(m.name).trim(), m);
+    }
     const ops: (() => any)[] = [];
     let marketCount = existingMarkets.length;
 
@@ -914,16 +917,15 @@ export class LuckyBetFeed implements IFeedProvider {
       const marketType = marketTypeOf(rawName);
       const groupExtId = g.id != null ? String(g.id) : null;
 
-      // Identiteti = id e grupit te feed-it; tregjet e vjetra pa extId lidhen nje here.
+      // Identiteti: shiko sipas extId ose emrit (emri eshte unik per ndeshjen ne DB)
       let market: any = groupExtId ? byExtId.get(groupExtId) : undefined;
       if (!market) {
-        const legacy = byName.get(rawName);
-        if (legacy) {
-          market = legacy;
-          if (groupExtId) {
-            ops.push(() => prisma.market.update({ where: { id: legacy.id }, data: { extId: groupExtId } }));
-            byExtId.set(groupExtId, legacy);
-            byName.delete(rawName);
+        market = byName.get(rawName);
+        if (market) {
+          if (groupExtId && !market.extId) {
+            ops.push(() => prisma.market.update({ where: { id: market.id }, data: { extId: groupExtId } }));
+            market.extId = groupExtId;
+            byExtId.set(groupExtId, market);
           }
         }
       }
@@ -936,6 +938,7 @@ export class LuckyBetFeed implements IFeedProvider {
         marketCount++;
         market = { id, matchId: dbId, extId: groupExtId, name: rawName, marketType, status: 'ACTIVE', outcomes: [] };
         if (groupExtId) byExtId.set(groupExtId, market);
+        byName.set(rawName, market); // Kyçe: parandalon dy tregje me te njejtin emer ne te njejtin batch!
       } else {
         // Tipi i tregut mund te kete ndryshuar (p.sh. "Match time result" tani eshte
         // TIME_RESULT, jo 1X2) — mbahet i sinkronizuar, pa krijuar treg te ri.
