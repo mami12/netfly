@@ -28,4 +28,5 @@ export interface IFeedProvider {
   onPitchUpdate(callback: (state: PitchState) => void): void;
   onOddsUpdate(callback: (delta: OddsDelta) => void): void;
   onMatchStatusChange(callback: (matchId: string, status: string, minute: number, homeScore: number, awayScore: number, period?: string) => void): void;
+  prioritizeMatch?(extId: number, waitForOddsMs?: number): Promise<void>;
 }

@@ -11,7 +11,7 @@ import { auth, requireAdmin } from './middleware/auth';
 import authRoutes from './routes/auth';
 import adminRoutes from './routes/admin';
 import managerRoutes from './routes/manager';
-import sportsRoutes, { clearMatchesCache } from './routes/sports';
+import sportsRoutes, { clearMatchesCache, setSportsFeed } from './routes/sports';
 import betsRoutes from './routes/bets';
 
 const app = express();
@@ -20,6 +20,7 @@ const wsService = new WSService(server);
 
 // Feed-i i vetëm: futboll real nga LuckyBet (pa simulime)
 const feed = new LuckyBetFeed();
+setSportsFeed(feed);
 
 // Çdo kërkesë HTTP nga përdoruesi zgjon dhe mban zgjuar feed-in
 app.use((req, res, next) => {

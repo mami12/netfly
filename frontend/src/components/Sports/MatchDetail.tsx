@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ChevronDown, ChevronUp, CornerDownLeft, Target, Flag, AlertTriangle, Radio } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, CornerDownLeft, Target, Flag, AlertTriangle, AlertCircle, RefreshCw, Radio } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { Match, Market } from '../../types';
 import OddsButton from './OddsButton';
@@ -41,44 +41,50 @@ export default function MatchDetail() {
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(['main']));
   const [showAllSections, setShowAllSections] = useState(false);
   const [expandedOutcomes, setExpandedOutcomes] = useState<Set<string>>(new Set());
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [, setTick] = useState(0);
+
+  const load = async (silent = true) => {
+    if (!id) return;
+    if (!silent) setIsRefreshing(true);
+    try {
+      const res = await apiClient.get(`/matches/${id}`);
+      setMatch(res.data);
+      const ms: Market[] = (res.data?.markets || []).filter(
+        (m: Market) => !/early\s*payout/i.test(m.name || '') && !isUnnamedMarket(m.name)
+      );
+
+      // 1) Hiq tregjet pa asnje kuote (shfaqeshin si kuti boshe)
+      const withOdds = ms.filter((m) => ((m as any).outcomes || []).length > 0);
+
+      // 2) Dublikatat: dy tregje te ndryshem nga feed-i mund te kene te njejtin
+      //    perkthim ("Match time result" dhe "Full time result") — mbahet ai me
+      //    shume opsione, keshtu lojtari nuk e shikon te njejtin treg 2 here.
+      const byLabel = new Map<string, Market>();
+      for (const m of withOdds) {
+        const label = marketLabel(m.name, t, tm).toLowerCase();
+        const prev = byLabel.get(label);
+        if (!prev) { byLabel.set(label, m); continue; }
+        if (((m as any).outcomes || []).length > ((prev as any).outcomes || []).length) byLabel.set(label, m);
+      }
+
+      setMarkets(Array.from(byLabel.values()));
+    } catch (e) {
+      console.error(e);
+    } finally {
+      if (!silent) setIsRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     if (!id) return;
-    let alive = true;
+    setLoadingSeconds(0);
+    load(true);
 
-    const load = async () => {
-      try {
-        const res = await apiClient.get(`/matches/${id}`);
-        if (!alive) return;
-        setMatch(res.data);
-        const ms: Market[] = (res.data?.markets || []).filter(
-          (m: Market) => !/early\s*payout/i.test(m.name || '') && !isUnnamedMarket(m.name)
-        );
-
-        // 1) Hiq tregjet pa asnje kuote (shfaqeshin si kuti boshe)
-        const withOdds = ms.filter((m) => ((m as any).outcomes || []).length > 0);
-
-        // 2) Dublikatat: dy tregje te ndryshem nga feed-i mund te kene te njejtin
-        //    perkthim ("Match time result" dhe "Full time result") — mbahet ai me
-        //    shume opsione, keshtu lojtari nuk e shikon te njejtin treg 2 here.
-        const byLabel = new Map<string, Market>();
-        for (const m of withOdds) {
-          const label = marketLabel(m.name, t, tm).toLowerCase();
-          const prev = byLabel.get(label);
-          if (!prev) { byLabel.set(label, m); continue; }
-          if (((m as any).outcomes || []).length > ((prev as any).outcomes || []).length) byLabel.set(label, m);
-        }
-
-        setMarkets(Array.from(byLabel.values()));
-      } catch (e) {
-        console.error(e);
-      }
-    };
-
-    load();
-    const timer = setInterval(load, POLL_MS); // statuset + kuotat rifreskohen cdo 5s
+    const timer = setInterval(() => load(true), POLL_MS); // statuset + kuotat rifreskohen cdo 5s
     const tickTimer = setInterval(() => setTick((v) => v + 1), 15000); // minuta ecen live
+    const secTimer = setInterval(() => setLoadingSeconds((s) => s + 1), 1000);
 
     const handleStatus = (e: any) => {
       const { matchId, status, minute, homeScore, awayScore, period } = e.detail || {};
@@ -100,9 +106,9 @@ export default function MatchDetail() {
     window.addEventListener('netfly:match-status', handleStatus);
 
     return () => {
-      alive = false;
       clearInterval(timer);
       clearInterval(tickTimer);
+      clearInterval(secTimer);
       window.removeEventListener('netfly:match-status', handleStatus);
     };
   }, [id]);
@@ -406,7 +412,42 @@ export default function MatchDetail() {
 
         {markets.length === 0 && (
           <div className="p-8 text-center text-text-secondary text-sm">
-            {match?.status === 'ENDED' ? 'Kjo ndeshje ka përfunduar.' : t('sections.odds_loading')}
+            {match?.status === 'ENDED' ? (
+              <span className="text-text-muted">Kjo ndeshje ka përfunduar.</span>
+            ) : match?.isSuspended ? (
+              <div className="flex flex-col items-center gap-2 text-yellow-400">
+                <AlertCircle size={24} />
+                <span className="font-semibold">Kuotat e kësaj ndeshjeje janë të pezulluara përkohësisht.</span>
+              </div>
+            ) : loadingSeconds < 7 ? (
+              <div className="flex flex-col items-center gap-3 py-4">
+                <div className="w-7 h-7 border-2 border-accent-green border-t-transparent rounded-full animate-spin" />
+                <span className="text-text-secondary">{t('sections.odds_loading')}</span>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 bg-secondary/40 border border-secondary p-6 rounded-2xl max-w-lg mx-auto">
+                <AlertCircle size={28} className="text-yellow-400" />
+                <div className="text-center">
+                  <div className="font-bold text-text-primary text-base mb-1">
+                    Nuk ka kuota të hapura për këtë ndeshje për momentin
+                  </div>
+                  <div className="text-xs text-text-secondary leading-relaxed">
+                    Shtëpia e basteve nuk ka hapur tregje bastesh për këtë ngjarje, ose kuotat janë mbyllur përkohësisht nga organizatori.
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setLoadingSeconds(0);
+                    load(false);
+                  }}
+                  disabled={isRefreshing}
+                  className="mt-2 px-4 py-2 rounded-xl bg-accent-green/15 hover:bg-accent-green/25 border border-accent-green/30 text-accent-green text-xs font-bold transition flex items-center gap-2"
+                >
+                  <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+                  <span>{isRefreshing ? 'Duke u rifreskuar...' : 'Rifresko Kuotat'}</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

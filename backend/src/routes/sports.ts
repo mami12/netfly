@@ -31,6 +31,14 @@ const matchDetailCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 3000; // 3 sekonda
 const DETAIL_TTL_MS = 2500; // 2.5 sekonda
 
+let sportsFeedInstance: any = null;
+export function setSportsFeed(feed: any) {
+  sportsFeedInstance = feed;
+}
+export function getSportsFeed() {
+  return sportsFeedInstance;
+}
+
 export function clearMatchesCache(matchId?: string) {
   matchesCache.clear();
   if (matchId) {
@@ -156,8 +164,20 @@ router.get('/matches/:id', async (req, res) => {
   const matchId = req.params.id;
   const cached = matchDetailCache.get(matchId);
   const now = Date.now();
-  if (cached && now - cached.ts < DETAIL_TTL_MS) {
+  // Mos kthe cache bosh nëse tregjet mund të kenë ardhur ndërkohë
+  if (cached && now - cached.ts < DETAIL_TTL_MS && (cached.data?.markets || []).length > 0) {
     return res.json(cached.data);
+  }
+
+  // Nëse është ndeshje nga LuckyBet, prioritizo abonimin e kuotave menjëherë
+  if (matchId.startsWith('lb-')) {
+    const extId = Number(matchId.slice(3));
+    if (Number.isFinite(extId) && extId > 0) {
+      const feed = getSportsFeed();
+      if (feed && typeof feed.prioritizeMatch === 'function') {
+        await feed.prioritizeMatch(extId, 1500).catch(() => {});
+      }
+    }
   }
 
   const match = await prisma.match.findUnique({

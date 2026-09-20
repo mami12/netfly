@@ -122,9 +122,69 @@ export class LuckyBetFeed implements IFeedProvider {
   private activeUsersCount = 0;
   private idleCheckTimer: NodeJS.Timeout | null = null;
 
+  private priorityIds = new Set<number>();
+  private matchOddsWaiters = new Map<number, (() => void)[]>();
+
   private oddsCbs: ((delta: OddsDelta) => void)[] = [];
   private statusCbs: ((matchId: string, status: string, minute: number, homeScore: number, awayScore: number, period?: string) => void)[] = [];
   private matchEventCbs: ((event: MatchEvent) => void)[] = [];
+
+  /**
+   * Prioritizon menjëherë një ndeshje kur një lojtar e hap në faqe.
+   * Dërgon kërkesë abonimi të menjëhershme në WebSocket për kuotat e plota (pa pritur ciklin 20s).
+   * Nëse ndeshja nuk ka kuota në DB, pret deri në `waitForOddsMs` që snapshot-i të përpunohet.
+   */
+  async prioritizeMatch(extId: number, waitForOddsMs = 1500): Promise<void> {
+    this.touch();
+    if (!Number.isFinite(extId) || extId <= 0) return;
+    this.priorityIds.add(extId);
+
+    // Bounded set size (maksimumi 100 ndeshje aktive njëkohësisht)
+    if (this.priorityIds.size > 100) {
+      const first = this.priorityIds.values().next().value;
+      if (first !== undefined) this.priorityIds.delete(first);
+    }
+
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send('42' + JSON.stringify([
+        'subscribe',
+        { messageType: 'subscribe-match-odds', data: { matchIds: [extId], isBaseOddsGroups: false } }
+      ]));
+      ws.send('42' + JSON.stringify([
+        'subscribe',
+        { messageType: 'subscribe-match-info', data: { matchIds: [extId] } }
+      ]));
+    }
+
+    if (waitForOddsMs <= 0) return;
+
+    // Nëse ndeshja i ka tashmë tregjet me kuota në DB, nuk ka nevojë për vonesë
+    const dbId = `lb-${extId}`;
+    const count = await prisma.market.count({ where: { matchId: dbId, outcomes: { some: {} } } });
+    if (count > 0) return;
+
+    // Prit deri në waitForOddsMs që të vijë dhe ruhet snapshot-i i kuotave nga feed-i
+    await new Promise<void>((resolve) => {
+      let timer: NodeJS.Timeout;
+      const done = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      timer = setTimeout(() => {
+        const arr = this.matchOddsWaiters.get(extId);
+        if (arr) {
+          const idx = arr.indexOf(done);
+          if (idx !== -1) arr.splice(idx, 1);
+        }
+        resolve();
+      }, waitForOddsMs);
+
+      const arr = this.matchOddsWaiters.get(extId) || [];
+      arr.push(done);
+      this.matchOddsWaiters.set(extId, arr);
+    });
+  }
 
   /** Sinjalizon aktivitet përdoruesi (kërkesë HTTP ose lidhje WebSocket) */
   touch() {
@@ -690,10 +750,13 @@ export class LuckyBetFeed implements IFeedProvider {
       this.subOffset = (this.subOffset + WINDOW) % pre.length;
     }
 
-    this.sendSub(live, false);       // live: te gjitha grupet + info
+    const priority = Array.from(this.priorityIds);
+    const fullSubs = Array.from(new Set([...live, ...priority]));
+
+    this.sendSub(fullSubs, false);   // live + priority: te gjitha grupet + info
     this.sendSub(near, false);       // prematch i afert: te gjitha grupet
     this.sendSub(rest, true);        // pjesa tjeter: vetem grupet baze
-    if (live.length) this.sendInfo(live);
+    if (fullSubs.length) this.sendInfo(fullSubs);
     if (near.length) this.sendInfo(near);
   }
 
@@ -930,6 +993,13 @@ export class LuckyBetFeed implements IFeedProvider {
 
     // 2) Zbato te gjitha ndryshimet ne blloqe: nje round-trip ne vend te nje pyetjeje per kuote
     await this.flushOps(ops);
+
+    // Njofto kërkesat që po prisnin në HTTP (prioritizeMatch)
+    const waiters = this.matchOddsWaiters.get(extId);
+    if (waiters && waiters.length) {
+      this.matchOddsWaiters.delete(extId);
+      waiters.forEach((w) => w());
+    }
 
     // Nje mesazh i vetem per te gjitha kuotat e ndryshuara (me pak trafik WS).
     if (deltas.length) {
