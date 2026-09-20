@@ -78,6 +78,12 @@ model Match {
   awayScore    Int          @default(0)
   currentMinute Int         @default(0)
   period       String? // statusi i feed-it: "1st Half", "Break Time", "2nd Half"...
+  // Baza e minutave te sakta: "matchTime" i fundit i marre nga feed-i (ms) + ora kur e morem.
+  // Pa keto, minuta mbetet e ngrirë mes push-eve dhe gjatë vonesave te shkrimit ne DB.
+  feedMatchTimeMs Int?
+  feedTimeAt   DateTime?
+  // Hera e fundit qe u ruajten kuotat e kesaj ndeshje (kontroll stazhi per bastet + prioritizim)
+  lastOddsAt   DateTime?
   extHomeId    Int? // id e ekipit vendas ne feed (per statistikat)
   extAwayId    Int? // id e ekipit mysafir ne feed
   homeCorners  Int          @default(0)

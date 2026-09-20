@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../db';
+import { derivedMinute } from '../utils/minute';
 
 const router = Router();
 
@@ -143,7 +144,8 @@ router.get('/matches', async (req, res) => {
     }
   }
 
-  const result = Array.from(matchMap.values());
+  // Minutat e sakta edhe mes push-eve te feed-it (ekstrapolim nga "matchTime" i fundit)
+  const result = Array.from(matchMap.values()).map((m) => ({ ...m, currentMinute: derivedMinute(m) }));
   matchesCache.set(cacheKey, { data: result, ts: now });
   res.json(result);
 });
@@ -199,6 +201,10 @@ router.get('/matches/:id', async (req, res) => {
       prisma.match.update({ where: { id: match.id }, data: { status: 'ENDED', currentMinute: 90 } }).catch(() => {});
     }
   }
+
+  // Minuta e ekstrapoluar: feed-i e dërgon "matchTime" vetëm në snapshot-et periodike,
+  // keshtu minuta nuk ngrin mes push-eve (faqja shfaq të njëjtën minutë si burimi).
+  match.currentMinute = derivedMinute(match);
 
   // Deduplicate markets by normalized name, preference for market with more outcomes
   const seen = new Map<string, any>();

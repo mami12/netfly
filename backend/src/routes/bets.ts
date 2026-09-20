@@ -8,6 +8,19 @@ const router = Router();
 
 const generateBookingCode = () => uuidv4().substring(0, 6).toUpperCase();
 
+/**
+ * Mbrojtje financiare: a jane kuotat e nje ndeshjeje mjaftueshem te freskëta per nje bast?
+ * - PREMATCH: gjithmone OK (kuotat ndryshojne rralle dhe ne mbahen te sinkronizuara).
+ * - LIVE: kerkohet rifreskim brenda 2 minutash nga feed-i. Nese radha e shkrimit mbetet
+ *   pas (ose feed-i hesht), nje bast do te merrte koeficient para-goli = humbje e sigurt.
+ */
+const STALE_LIVE_ODDS_MS = 120 * 1000;
+function oddsAreFresh(match: { status: string; lastOddsAt?: Date | null }): boolean {
+  if (match.status !== 'LIVE') return true;
+  const lastAt = match.lastOddsAt ? new Date(match.lastOddsAt).getTime() : 0;
+  return lastAt > 0 && Date.now() - lastAt <= STALE_LIVE_ODDS_MS;
+}
+
 router.post('/place', auth, async (req: AuthRequest, res) => {
   const stake = parseFloat(req.body.stake) || 0;
   const selections = req.body.selections || [];
@@ -48,6 +61,12 @@ router.post('/place', auth, async (req: AuthRequest, res) => {
       });
     }
     const clientOdds = sel.oddsAtPlacement || sel.odds || outcome.odds;
+    if (!oddsAreFresh(outcome.market.match)) {
+      return res.status(400).json({
+        error: `Kuotat për "${sel.matchName || 'ndeshjen e zgjedhur'}" po rifreskohen. Provo përsëri pas pak sekondash.`,
+        message: `Kuotat për "${sel.matchName || 'ndeshjen e zgjedhur'}" po rifreskohen. Provo përsëri pas pak sekondash.`
+      });
+    }
     if (Math.abs(outcome.odds - clientOdds) / clientOdds > 0.1) {
       return res.status(400).json({ 
         error: 'Koeficientët kanë ndryshuar gjatë vendosjes. Ju lutem pranoni koeficientët e rinj.', 
