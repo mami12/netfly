@@ -50,13 +50,14 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     const tickInterval = setInterval(() => setTick((v) => v + 1), 15000); // minuta ecen live ne ekran
 
     const handleStatus = (e: any) => {
-      const { matchId, status, minute, homeScore, awayScore } = e.detail || {};
+      const { matchId, status, minute, homeScore, awayScore, period } = e.detail || {};
       setMatches(prev => prev.map(m => {
         if (m.id === matchId) {
           return {
             ...m,
             status: status || m.status,
             currentMinute: minute !== undefined ? minute : m.currentMinute,
+            period: period !== undefined ? period : m.period,
             homeScore: homeScore !== undefined ? homeScore : m.homeScore,
             awayScore: awayScore !== undefined ? awayScore : m.awayScore
           };
@@ -161,7 +162,7 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
     // si 1/X/2 ne liste. Preferohet tregu me 3 opsione (1 / X / 2).
     const candidates = markets.filter((x: any) => {
       const name = String(x.name || '').trim();
-      if (/time result/i.test(name)) return false;
+      if (/match time result/i.test(name)) return false;
       return x.marketType === '1X2' || /^(1x2|match winner|match result|full ?time result|result|rezultati final)$/i.test(name);
     });
     const mk = candidates.find((x: any) => ((x.outcomes || []).length === 3)) ||
@@ -346,7 +347,7 @@ export default function MatchList({ tournamentId, categoryId, sportId, isLiveOnl
           </div>
 
           {/* 1X2 Odds Buttons Column */}
-          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+          <div className="flex items-center gap-1.5 w-full sm:w-auto" onClick={(e) => e.stopPropagation()}>
             <div className="grid grid-cols-3 gap-1.5 flex-1 sm:w-64 sm:flex-initial">
               {market1X2 && outcome1 ? (
                 <OddsButton match={m} market={market1X2} outcome={outcome1} />

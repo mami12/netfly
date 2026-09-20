@@ -102,16 +102,13 @@ router.get('/matches', async (req, res) => {
       continue;
     }
 
-    // Ndeshjet LIVE: llogarit minutën reale dhe mbyll ato që kanë kaluar > 130 minuta
+    // Ndeshjet LIVE: mbyll ato që kanë kaluar > 135 minuta
     if (m.status === 'LIVE' && m.startTime) {
       const elapsed = Math.floor((now - new Date(m.startTime).getTime()) / 60000);
-      if (elapsed > 130) {
+      if (elapsed > 135) {
         // Ndeshja ka perfunduar ne realitet
         prisma.match.update({ where: { id: m.id }, data: { status: 'ENDED', currentMinute: 90 } }).catch(() => {});
         continue;
-      }
-      if (elapsed >= 1) {
-        m.currentMinute = Math.min(120, Math.max(m.currentMinute || 0, elapsed));
       }
     }
 
@@ -174,14 +171,12 @@ router.get('/matches/:id', async (req, res) => {
   });
   if (!match) return res.status(404).json({ error: 'Match not found' });
 
-  // Ndeshjet LIVE: llogaritje dinamike e minutës nga ora e fillimit
+  // Ndeshjet LIVE: mbyll ato që kanë kaluar > 135 minuta
   if (match.status === 'LIVE' && match.startTime) {
     const elapsed = Math.floor((Date.now() - new Date(match.startTime).getTime()) / 60000);
-    if (elapsed > 130) {
+    if (elapsed > 135) {
       match.status = 'ENDED';
       prisma.match.update({ where: { id: match.id }, data: { status: 'ENDED', currentMinute: 90 } }).catch(() => {});
-    } else if (elapsed >= 1) {
-      match.currentMinute = Math.min(120, Math.max(match.currentMinute || 0, elapsed));
     }
   }
 

@@ -207,9 +207,9 @@ export const isUnnamedMarket = (name: string) => !String(name || '').trim() || /
 export function periodLabel(status: string): string {
   const p = String(status || '').toLowerCase();
   if (!p) return '';
+  if (p.includes('break') || p.includes('half-time') || p.includes('halftime') || p === 'ht' || p.includes('pushim')) return 'Pushim';
   if (p.includes('1st half') || p === 'h1' || p === '1h') return 'Pjesa 1';
   if (p.includes('2nd half') || p === 'h2' || p === '2h') return 'Pjesa 2';
-  if (p.includes('break') || p.includes('half-time') || p.includes('halftime') || p === 'ht') return 'Pushim';
   if (p.includes('extra time') || p.includes('overtime')) return 'Shtesë';
   if (p.includes('penalt')) return 'Penallti';
   if (p.includes('about to start') || p.includes('not started') || p.includes('scheduled')) return 'Nis së shpejti';
@@ -219,14 +219,16 @@ export function periodLabel(status: string): string {
   return status;
 }
 
-/** Etiketa e minutës për ndeshje live: "67'", ose statusi kur minutat mungojnë. */
+/** Etiketa e minutës për ndeshje live: përdor minutën dhe periudhën ekzakte nga API */
 export function minuteLabel(m: { currentMinute?: number; period?: string | null; startTime?: string }): string {
   const min = Number(m?.currentMinute || 0);
   const p = String(m?.period || '').toLowerCase();
 
-  // Statuset e veçanta kanë përparësi ndaj minutës (H1/H2 trajtohen në periodLabel)
-  if (p && !/^(h1|h2|1h|2h)$/.test(p)) {
-    if (p.includes('break') || p.includes('half-time') || p.includes('halftime') || p === 'ht') return 'Pushim';
+  // 1. Statuset e veçanta / Pushimi kanë përparësi absolute
+  if (p) {
+    if (p.includes('break') || p.includes('half-time') || p.includes('halftime') || p === 'ht' || p.includes('pushim')) {
+      return 'Pushim';
+    }
     if (p.includes('penalt')) return 'Penallti';
     if (p.includes('extra time') || p.includes('overtime')) return 'Shtesë';
     if (p.includes('about to start') || p.includes('not started') || p.includes('scheduled')) return 'Nis së shpejti';
@@ -235,24 +237,13 @@ export function minuteLabel(m: { currentMinute?: number; period?: string | null;
     if (p.includes('end') || p.includes('finish')) return 'Përfundoi';
   }
 
-  // Llogaritje dinamike nga koha reale e fillimit (minuta ecën vetë, nuk mbetet kurrë te 2')
-  if (m?.startTime) {
-    const started = new Date(m.startTime).getTime();
-    if (Number.isFinite(started)) {
-      const elapsed = Math.floor((Date.now() - started) / 60000);
-      if (elapsed > 125) return 'Përfundoi';
-      if (elapsed >= 1) {
-        const liveVal = Math.max(elapsed, Number(m?.currentMinute || 0));
-        return `${Math.min(120, liveVal)}'`;
-      }
-      if (elapsed <= 0) return 'Nis tani';
-    }
+  // 2. Merre minutën ekzakte nga burimi i të dhënave (API / Feed)
+  if (min > 0) {
+    return `${Math.min(120, Math.round(min))}'`;
   }
 
-  if (min > 0) return `${Math.min(120, Math.round(min))}'`;
-
-  if (p) return periodLabel(p); // "Pjesa 1" / "Pjesa 2"
-  return 'Në vazhdim';
+  // 3. Nëse sapo ka filluar
+  return "1'";
 }
 
 /** Etiketa e kohës së fillimit: "Filloi në 14:15" ose "Nis në 14:15" */

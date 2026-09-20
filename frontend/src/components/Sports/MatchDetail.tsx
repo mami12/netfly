@@ -81,7 +81,7 @@ export default function MatchDetail() {
     const tickTimer = setInterval(() => setTick((v) => v + 1), 15000); // minuta ecen live
 
     const handleStatus = (e: any) => {
-      const { matchId, status, minute, homeScore, awayScore } = e.detail || {};
+      const { matchId, status, minute, homeScore, awayScore, period } = e.detail || {};
       if (matchId === id) {
         setMatch((prev) =>
           prev
@@ -89,6 +89,7 @@ export default function MatchDetail() {
                 ...prev,
                 status: status || prev.status,
                 currentMinute: minute !== undefined ? minute : prev.currentMinute,
+                period: period !== undefined ? period : prev.period,
                 homeScore: homeScore !== undefined ? homeScore : prev.homeScore,
                 awayScore: awayScore !== undefined ? awayScore : prev.awayScore
               }
