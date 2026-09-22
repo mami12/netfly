@@ -1,6 +1,15 @@
 # Përmbledhje e session-it — Netfly (futboll real, kuota live)
 
+> 📌 **Përditësim i hostimit (i verifikuar):** repo-t e vjetra ishin fshirë nga GitHub-i.
+> U rikrijuan dhe u mbushën sërish:
+> - `https://github.com/mami12/netfly` (private) — monorepo `backend/` + `frontend/`
+> - `https://github.com/mami12/netfly-frontend` (publik) — hoston GitHub Pages: `https://mami12.github.io/netfly-frontend`
+> - Backend live: `https://netfly-backend-1.onrender.com` (`/api/health` → ok, `/api/matches` → 200)
+>
+> Udhëzuesi i deploy-it në Render: **`docs/DEPLOY-RENDER.md`** (Blueprint në rrënjë: `render.yaml`).
+
 Dokument referimi: çfarë ndërtuam, pse, si, me çfarë, dhe çfarë mbetet.
+
 
 ---
 
