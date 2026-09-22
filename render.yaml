@@ -1,0 +1,38 @@
+# Render Blueprint — deploy automatik i BACKEND-it në https://render.com
+#
+# KUJDES: Render-i e lexon `render.yaml` VETËM nga rrënja e repos (ky skedar).
+#   Dashboard -> New + -> Blueprint -> zgjidh repo-n `netfly` -> Apply.
+#   (Opsioni manual: New + -> Web Service, me Root Directory = backend.)
+#
+# Udhezues i plotë hap-pas-hapi: docs/DEPLOY-RENDER.md
+services:
+  - type: web
+    name: netfly-backend
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: backend
+    # build: instalon, zbaton skemën në Postgres (prisma db push), kompajlon TS dhe fut admin/manager
+    buildCommand: npm install && npm run build && npm run db:seed
+    # start: siguron skemën dhe nis API-n + WebSocket-in
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # PORT-in e vendos Render-i vetë (process.env.PORT).
+      # DATABASE_URL = URL e "Session pooler" të Supabase (IPv4, port 5432) — plotësohet në dashboard.
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: "*"
+      # Feed-i real (futboll): kredencial e platformës burim — mos e ndrysho pa arsye.
+      - key: LUCKYBET_PARTNER_ID
+        value: d3edfa27-7cac-4f77-9e6e-4e2fa2d1ab5f
+      - key: LUCKYBET_API_HOST
+        value: api-gateway.gw-lucky-bet.com
+      - key: LUCKYBET_LANGUAGE
+        value: en-001

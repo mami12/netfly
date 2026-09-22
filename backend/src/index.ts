@@ -3,7 +3,8 @@ import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
-import { PORT } from './config';
+import { PORT, CORS_ORIGINS } from './config';
+import { prisma } from './db';
 import { WSService } from './services/wsService';
 import { LuckyBetFeed } from './feeds/LuckyBetFeed';
 import { auth, requireAdmin } from './middleware/auth';
@@ -17,6 +18,13 @@ import betsRoutes from './routes/bets';
 const app = express();
 const server = createServer(app);
 const wsService = new WSService(server);
+
+// CORS: "*" = te gjitha origjinat (frontend ne GitHub Pages / Render / lokal).
+// Per kufizim: CORS_ORIGINS=https://mami12.github.io,https://netfly.onrender.com
+const allowedOrigins: boolean | string[] =
+  CORS_ORIGINS.trim() === '*'
+    ? true
+    : CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
 
 // Feed-i i vetëm: futboll real nga LuckyBet (pa simulime)
 const feed = new LuckyBetFeed();
@@ -33,7 +41,7 @@ wsService.onClientCountChange((count) => {
   feed.setActiveUsers(count);
 });
 
-app.use(cors());
+app.use(cors({ origin: allowedOrigins }));
 app.use(helmet());
 app.use(compression());
 app.use(express.json());
@@ -66,3 +74,22 @@ feed.start();
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Mbyllje e paster kur Render-i rinis/zhvendos instancen (SIGTERM) ose Ctrl+C lokalisht (SIGINT).
+// Pa kete, lidhjet e Prisma-s dhe WSS-i mbeten te hapura dhe deploy-i i ri vonohet.
+let shuttingDown = false;
+const shutdown = (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Netfly] ${signal}: duke u mbyllur...`);
+  try { feed.stop(); } catch { /* ignore */ }
+  try { wsService.close(); } catch { /* ignore */ }
+  server.close(() => {
+    prisma.$disconnect().catch(() => {}).finally(() => process.exit(0));
+  });
+  // Rruge rezerve: mos lejo procesin te varet pergjithmone
+  setTimeout(() => process.exit(0), 8000).unref();
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+

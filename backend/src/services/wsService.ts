@@ -62,4 +62,13 @@ export class WSService {
       }
     }
   }
+
+  // Mbyllje e paster (Render dergon SIGTERM ne cdo redeploy/restart)
+  close() {
+    for (const [, state] of this.clients) {
+      try { state.ws.close(); } catch { /* ignore */ }
+    }
+    this.clients.clear();
+    try { this.wss.close(); } catch { /* ignore */ }
+  }
 }

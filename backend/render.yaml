@@ -1,23 +1,33 @@
+# NUK e lexon Render-i Blueprint nga kjo dosje!
+# Render kërkon `render.yaml` në RRËNJË të repos -> shih ../render.yaml (ky është ai që përdoret).
+#
+# Ky skedar mbahet vetëm si reference për rastin kur `backend/` ngarkohet si repo i veçantë.
 services:
   - type: web
-    name: netfly-sport-backend
-    env: node
+    name: netfly-backend
+    runtime: node
     plan: free
     region: frankfurt
     buildCommand: npm install && npm run build && npm run db:seed
     startCommand: npm start
     healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 10000
       # Baza Postgres (Supabase): vendoset si env var DATABASE_URL në dashboardin e Render-it.
-      # Duhet të jetë URL-ja e "Transaction pooler" (port 6543, pgbouncer=true, IPv4!):
-      # postgresql://postgres.<ref>:<PASSWORD>@aws-<n>-<region>.pooler.supabase.com:6543/postgres?sslmode=require&pgbouncer=true&connection_limit=5&pool_timeout=20
+      # Duhet të jetë URL-ja e "Session pooler" (port 5432, IPv4!):
+      # postgresql://postgres.<ref>:<PASSWORD>@aws-<n>-<region>.pooler.supabase.com:5432/postgres?sslmode=require&connection_limit=10&pool_timeout=30
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: CORS_ORIGINS
         value: "*"
+      - key: LUCKYBET_PARTNER_ID
+        value: d3edfa27-7cac-4f77-9e6e-4e2fa2d1ab5f
+      - key: LUCKYBET_API_HOST
+        value: api-gateway.gw-lucky-bet.com
+      - key: LUCKYBET_LANGUAGE
+        value: en-001
+
