@@ -51,7 +51,7 @@ dhe ndërtojnë vetë backend-in me `npm --prefix backend ...`. Pra me cilësime
 mjafton të vendosësh env vars (Hapi 3) dhe të bësh **Manual Deploy**.
 
 Konfigurimi i rekomanduar (më i shpejtë, pa punë të panevojshme):
-Settings → **Root Directory = `backend`** · **Build Command = `npm install && npm run build && npm run db:seed`** ·
+Settings → **Root Directory = `backend`** · **Build Command = `npm ci && npm run build && npm run db:seed`** ·
 **Start Command = `npm start`** · **Health Check Path = `/api/health`** → Save → Manual Deploy.
 
 | | Rrënja e repos (default) | Root Directory = `backend` |
@@ -63,6 +63,33 @@ Settings → **Root Directory = `backend`** · **Build Command = `npm install &&
 > Versione të Node-it: Render-i sot përdor **24.21.0** si default për shërbimet e reja,
 > ndërsa Prisma 5.22 mbulon zyrtarisht 18/20/22 — prandaj repo-ja e fikson **22.22.0**
 > me `.node-version` (+ `engines.node`). Nëse do ta ndryshosh: env var `NODE_VERSION`.
+
+---
+
+## 🔒 Instalimi deterministik (pse s'ka më `error TS2769`)
+
+**Problemi:** `yarn install` pa lockfile e zgjidhte `@types/compression` → `"@types/express": "*"`
+→ instalohej **`@types/express@5.x`** (kopje e dytë tipash) ndërsa `express` mbeti v4 → `tsc` binte me:
+
+```
+src/index.ts(46,9): error TS2769: No overload matches this call.
+  Argument of type 'RequestHandler<ParamsDictionary, any, any, ParsedQs, Record<string, any>>'
+  is not assignable to parameter of type 'PathParams'.
+```
+
+**Zgjidhja (e aplikuar në `backend/package.json`):**
+- `"@types/express": "4.17.25"` dhe `"@types/compression": "1.8.1"` — versione të fiksuara (pa `^`).
+- `"resolutions"` (për yarn) + `"overrides"` (për npm) që detyrojnë një version të vetëm:
+  `@types/express` = `4.17.25`, `@types/express-serve-static-core` = `4.19.9`.
+- **Lockfile-at e regjistruar në repo:** `backend/yarn.lock` dhe `yarn.lock` (rrënjë) → instalimi
+  jep gjithmonë të njëjtat versione (pa "No lockfile found").
+- `postinstall` u thjeshtua në `prisma generate` (nuk ekzekuton më `tsc` gjatë instalimit).
+
+**Verifikuar lokalisht** me `yarn@1.22.22` (i njëjti version si në Render): `yarn install` → `prisma generate` → `tsc --noEmit` → **exit 0**.
+
+> ℹ️ `engines.node` u hoq me qëllim: yarn v1 e trajton si gabim të vdekshëm
+> (`The engine "node" is incompatible with this module`) kur versioni lokal nuk përputhet.
+> Versioni fiksohet vetëm me `.node-version` (Render e respekton: *"Using Node.js version 22.22.0 via .../backend/.node-version"*).
 
 ---
 
@@ -83,6 +110,9 @@ Settings → **Root Directory = `backend`** · **Build Command = `npm install &&
      dot (gabimi `ENOTFOUND`).
    - `connection_limit=10&pool_timeout=30` janë **të detyrueshëm**, përndryshe kuotat nuk
      shkruhen (`Timed out fetching a new connection`).
+   - ⚠️ Në log-un e Render-it duhet të shfaqet `...pooler.supabase.com:`**`5432`**. Nëse shfaqet
+     `:6543` ke marrë **Transaction pooler** (pgbouncer) → `prisma db push` dështon me
+     `prepared statement "s0" already exists`. Kopjo URL-në nga Supabase → **Connect → Session pooler**.
 
 Render-i krijon automatikisht: `NODE_ENV=production`, `JWT_SECRET` (i gjeneruar),
 `CORS_ORIGINS=*`, `LUCKYBET_PARTNER_ID`, `LUCKYBET_API_HOST`, `LUCKYBET_LANGUAGE`.
@@ -100,7 +130,7 @@ Render-i krijon automatikisht: `NODE_ENV=production`, `JWT_SECRET` (i gjeneruar)
 | Runtime | `Node` |
 | Branch | `main` |
 | **Root Directory** | **`backend`** ← shumë e rëndësishme |
-| Build Command | `npm install && npm run build && npm run db:seed` |
+| Build Command | `npm ci && npm run build && npm run db:seed` (ose `yarn install; yarn build` — të dyja punojnë tani) |
 | Start Command | `npm start` |
 | Health Check Path | `/api/health` |
 | Plan | Free |
@@ -159,6 +189,8 @@ Kredencialet e testimit (krijuar nga `prisma/seed.ts`): **`admin` / `admin123`**
 
 | Gabimi në log | Shkaku | Zgjidhja |
 |---|---|---|
+| `error TS2769: No overload matches this call ... not assignable to parameter of type 'PathParams'` | `yarn install` pa lockfile zgjidh `@types/express@5.x` (nga `@types/compression`) | Tashmë e rregulluar me `resolutions`/`overrides` + `yarn.lock`; mos i hiq ato |
+| `prepared statement "s0" already exists` / `prisma db push` dështon | `DATABASE_URL` në port **6543** (Transaction pooler, pgbouncer) | Përdor port **5432** (Session pooler) |
 | `sh: 1: prisma: not found` / `exit code 127` | Root Directory bosh + `yarn install` s'instalon varësitë e backend-it | Vendos **Root Directory = `backend`** (ose lëri default-et: skriptet e rrënjës tani i instalojnë vetë) |
 | `info No lockfile found` (yarn) | Nuk ka `yarn.lock` në rrënjë | Info, jo gabim — build-i vazhdon |
 | `Cannot find module '/opt/render/project/src/frontend/dist/index.js'` | Root Directory e gabuar | Vendos **`backend`** |
