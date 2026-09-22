@@ -1,7 +1,14 @@
 # Deploy i backend-it në Render.com (hap pas hapi)
 
 Repo: **https://github.com/mami12/netfly** (private, monorepo: `backend/` + `frontend/`)
-Backend live (i verifikuar): `https://netfly-backend-1.onrender.com/api/health` → `{"status":"ok"}`
+Backend: emri i shërbimit sipas `render.yaml` është **`netfly-backend`** → `https://netfly-backend.onrender.com`
+Kontroll: `https://netfly-backend.onrender.com/api/health` → `{"status":"ok"}`
+
+> ⚠️ Nëse e ndryshon emrin e shërbimit në Render, edhe URL-ja ndryshon. Përditësoje frontend-in me një komandë:
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File frontend\deploy-gh-pages.ps1 -ApiUrl https://<emri-i-sherbimit>.onrender.com
+> ```
+> (skripti shkruan vetë `frontend/.env`, ndërton dhe ripublikon faqen)
 
 > ⚠️ Shënim i rëndësishëm: repo-t e vjetra `netfly` / `netfly-backend` / `netfly-frontend`
 > ishin **fshirë** nga GitHub-i (llogaria `mami12` kishte 0 repo). Repo-ja e re `netfly`
@@ -159,8 +166,8 @@ powershell -ExecutionPolicy Bypass -File frontend\deploy-gh-pages.ps1
 URL-të e backend-it jepen në `frontend/.env` **para** build-it:
 
 ```env
-VITE_API_URL=https://netfly-backend-1.onrender.com
-VITE_WS_URL=wss://netfly-backend-1.onrender.com
+VITE_API_URL=https://netfly-backend.onrender.com
+VITE_WS_URL=wss://netfly-backend.onrender.com
 ```
 
 > Nëse URL-ja e Render-it ndryshon (emër/regjion i re), përditëso të dyja vlerat

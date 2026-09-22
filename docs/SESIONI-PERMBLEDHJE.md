@@ -4,7 +4,7 @@
 > U rikrijuan dhe u mbushën sërish:
 > - `https://github.com/mami12/netfly` (private) — monorepo `backend/` + `frontend/`
 > - `https://github.com/mami12/netfly-frontend` (publik) — hoston GitHub Pages: `https://mami12.github.io/netfly-frontend`
-> - Backend live: `https://netfly-backend-1.onrender.com` (`/api/health` → ok, `/api/matches` → 200)
+> - Backend: shërbimi sipas `render.yaml` = **`netfly-backend`** → `https://netfly-backend.onrender.com`
 >
 > Udhëzuesi i deploy-it në Render: **`docs/DEPLOY-RENDER.md`** (Blueprint në rrënjë: `render.yaml`).
 
@@ -52,7 +52,7 @@ Grupet "Early payout" (emri përmban score-in, p.sh. `Full time result (Early pa
 | Shërbim | Roli | Adresa |
 |---|---|---|
 | **GitHub** | Kodi burim | `https://github.com/mami12/netfly` (monorepo: `backend/` + `frontend/`) |
-| **Render** | Hosting **BACKEND** (Web Service, root `backend`) | `netfly-backend-1.onrender.com` |
+| **Render** | Hosting **BACKEND** (Web Service, root `backend`) | `netfly-backend.onrender.com` |
 | **GitHub Pages** | Hosting **FRONTEND** (dega `gh-pages` e `netfly-frontend`) | `mami12.github.io/netfly-frontend` |
 | **Supabase** | Baza Postgres (projekt `tvynxkthwxlxjlllehgo`, region `eu-west-1`) | Session pooler: `aws-1-eu-west-1.pooler.supabase.com:5432` |
 | **JWT** | Sesionet e përdoruesve | `JWT_SECRET` (env në Render) |
@@ -75,8 +75,8 @@ postgresql://postgres.tvynxkthwxlxjlllehgo:<PASSWORD>@aws-1-eu-west-1.pooler.sup
 
 **Frontend-i** lexon backend-in nga `frontend/.env`:
 ```
-VITE_API_URL=https://netfly-backend-1.onrender.com
-VITE_WS_URL=wss://netfly-backend-1.onrender.com
+VITE_API_URL=https://netfly-backend.onrender.com
+VITE_WS_URL=wss://netfly-backend.onrender.com
 ```
 
 ---

@@ -1,14 +1,35 @@
 # Deploy i frontend-it ne GitHub Pages (dega gh-pages e netfly-frontend)
 #
 # Perdorimi:  powershell -ExecutionPolicy Bypass -File frontend\deploy-gh-pages.ps1
+#             powershell -ExecutionPolicy Bypass -File frontend\deploy-gh-pages.ps1 -ApiUrl https://netfly-backend.onrender.com
 #
-# Cfare ben: build-on dist/ dhe e ngarkon ne degen gh-pages -> faqja perditesohet.
+# Cfare ben: (opsionale) shkruan frontend/.env me URL-ne e backend-it, pastaj build-on dist/
+#            dhe e ngarkon ne degen gh-pages -> faqja perditesohet me URL-ne e re.
+param(
+  [string]$ApiUrl
+)
+
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $src      = Join-Path $repoRoot 'frontend\dist'
 $dst      = Join-Path $env:TEMP 'netfly-ghpages'
 $remote   = 'https://github.com/mami12/netfly-frontend'
+$envFile  = Join-Path $repoRoot 'frontend\.env'
+
+Write-Host '=== 0) URL-ja e backend-it ===' -ForegroundColor Cyan
+if ($ApiUrl) {
+  $api = $ApiUrl.Trim().TrimEnd('/')
+  if ($api -notmatch '^https?://') { $api = "https://$api" }
+  $ws = $api -replace '^http', 'ws'
+  @("VITE_API_URL=$api", "VITE_WS_URL=$ws") | Set-Content $envFile -Encoding UTF8
+  Write-Host "U perditesua frontend\.env -> $api" -ForegroundColor Green
+} elseif (Test-Path $envFile) {
+  Write-Host 'Po perdoret frontend\.env ekzistues:'
+  Get-Content $envFile | ForEach-Object { Write-Host "   $_" }
+} else {
+  throw 'frontend\.env mungon — kalo: -ApiUrl https://<backend>.onrender.com'
+}
 
 Write-Host '=== 1) Build ===' -ForegroundColor Cyan
 Set-Location (Join-Path $repoRoot 'frontend')
