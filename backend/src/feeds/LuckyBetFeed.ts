@@ -1141,6 +1141,12 @@ export class LuckyBetFeed implements IFeedProvider {
     return this.isPriorityId(Number(dbId.slice(3)));
   }
 
+  /** A eshte ndeshje LIVE? Kuotat e saj duhet te shkruhen PARA prematch-it (ato levizin me shpejt). */
+  private isLiveDbId(dbId: string) {
+    const extId = Number(dbId.slice(3));
+    return Number.isFinite(extId) && this.liveIds.includes(extId);
+  }
+
   /** Çelësi i nje grupi kuotash: id-ja e feed-it (ose emri si rezervë). */
   private groupKey(g: Dict) {
     return g?.id != null ? `id:${g.id}` : `name:${String(g?.name || '').trim()}`;
@@ -1181,18 +1187,21 @@ export class LuckyBetFeed implements IFeedProvider {
   private pumpMatch(dbId: string) {
     if (this.oddsBusy.has(dbId)) return;
     this.oddsBusy.add(dbId);
+    // Kuotat LIVE (dhe ndeshja e hapur nga lojtari) kalojne PARA radhes se prematch-it:
+    // pa kete, radha mbushet me prematch dhe kuotat live freskohen me vonese minutash.
+    const prio = this.isPriorityDbId(dbId) || this.isLiveDbId(dbId);
     void (async () => {
       try {
         while (this.pendingInfo.has(dbId) || this.pendingOdds.has(dbId)) {
           if (this.pendingInfo.has(dbId)) {
             const info = this.pendingInfo.get(dbId)!;
             this.pendingInfo.delete(dbId);
-            await this.enqueue(dbId, () => this.applyInfo(info), 'applyInfo', this.isPriorityDbId(dbId));
+            await this.enqueue(dbId, () => this.applyInfo(info), 'applyInfo', prio);
           }
           if (this.pendingOdds.has(dbId)) {
             const data = this.pendingOdds.get(dbId)!;
             this.pendingOdds.delete(dbId);
-            await this.enqueue(dbId, () => this.applyOdds(data), 'applyOdds', this.isPriorityDbId(dbId));
+            await this.enqueue(dbId, () => this.applyOdds(data), 'applyOdds', prio);
           }
         }
       } catch (e: any) {
