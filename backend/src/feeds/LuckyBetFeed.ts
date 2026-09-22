@@ -8,10 +8,29 @@ const PARTNER = process.env.LUCKYBET_PARTNER_ID || 'd3edfa27-7cac-4f77-9e6e-4e2f
 const HOST = process.env.LUCKYBET_API_HOST || 'api-gateway.gw-lucky-bet.com';
 const LANG = process.env.LUCKYBET_LANGUAGE || 'en-001';
 const BASE = `https://${HOST}`;
+const BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 const HTTP_HEADERS = {
-  Accept: 'application/json',
+  Accept: 'application/json, text/plain, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'User-Agent': BROWSER_UA,
   Origin: 'https://bitgames6205.com',
   Referer: 'https://bitgames6205.com/'
+};
+/**
+ * Header-at e upgrade-it te WebSocket. REST-i punon nga çdo host, por Cloudflare e hedh
+ * poshte ne heshtje nje upgrade WS pa UA/referer browseri kur vjen nga IP datacenter
+ * (Render) — nga PC-ja kalonte sepse IP-ja eshte rezidenciale. Prandaj dergohen te njejtat
+ * header-a si browseri.
+ */
+const WS_HEADERS = {
+  'User-Agent': BROWSER_UA,
+  Accept: '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  Origin: 'https://bitgames6205.com',
+  Referer: 'https://bitgames6205.com/',
+  'Cache-Control': 'no-cache',
+  Pragma: 'no-cache'
 };
 
 type Dict = any;
@@ -158,6 +177,7 @@ export class LuckyBetFeed implements IFeedProvider {
   // Gjendja e lidhjes WS + koha e mesazhit te fundit (watchdog + diagnostike).
   private wsState = 'idle';
   private lastWsMsgAt = 0;
+  private wsFailures = 0;
 
   private oddsCbs: ((delta: OddsDelta) => void)[] = [];
   private statusCbs: ((matchId: string, status: string, minute: number, homeScore: number, awayScore: number, period?: string) => void)[] = [];
@@ -397,6 +417,9 @@ export class LuckyBetFeed implements IFeedProvider {
     const liveNew: number[] = [];
     const preNew: { id: number; at: number }[] = [];
     const todo: { it: Dict; catSlug: string }[] = [];
+    // Ndeshjet qe burimi i ka mbyllur per baste ("closed": true) — sinjali per t'i shpallur
+    // te perfunduara kur nuk kemi WS (pa te, ato mbeteshin LIVE me ore te tera).
+    const closedById = new Map<number, boolean>();
 
     for (const it of items) {
       if (Number(it.sportId) !== 18) continue;
@@ -410,6 +433,7 @@ export class LuckyBetFeed implements IFeedProvider {
 
       const id = Number(it.id);
       keep.add(id);
+      closedById.set(id, !!it.closed);
       if (String(it.service || '').toUpperCase() === 'LIVE') liveNew.push(id);
       else preNew.push({ id, at: Number(it.startAt) || 0 });
       todo.push({ it, catSlug });
@@ -437,9 +461,12 @@ export class LuckyBetFeed implements IFeedProvider {
     const nowTs = Date.now();
     for (const m of open) {
       const ext = Number(m.id.slice(3));
-      // Mbyll nese nuk eshte me ne feed OSE nese eshte LIVE por ka kaluar 130 min nga nisja
-      const isExpiredLive = m.status === 'LIVE' && m.startTime && (nowTs - m.startTime.getTime() > 130 * 60 * 1000);
-      if (Number.isFinite(ext) && (!keep.has(ext) || isExpiredLive)) {
+      const elapsedMin = m.startTime ? (nowTs - m.startTime.getTime()) / 60000 : 0;
+      // Ndeshja e perfunduar: burimi e ka mbyllur per baste ("closed": true) + koha e lojes
+      // ka mbaruar (mbi ~112 min reale = 45'+15'+45'+shtesa), ose ka kaluar deri 130 min.
+      const closedAndOver = m.status === 'LIVE' && closedById.get(ext) === true && elapsedMin > 112;
+      const tooOld = m.status === 'LIVE' && elapsedMin > 130;
+      if (Number.isFinite(ext) && (!keep.has(ext) || closedAndOver || tooOld)) {
         await this.endMatch(ext);
       }
     }
@@ -889,17 +916,20 @@ export class LuckyBetFeed implements IFeedProvider {
       this.ws = null;
       this.wsState = `closed(${why})`;
       if (!this.running || this.isSleeping) return;
-      console.log(`[LuckyBetFeed] WS u mbyll: ${why} — rilidhje pas 5s`);
+      this.wsFailures++;
+      const delay = this.wsFailures <= 3 ? 5000 : this.wsFailures <= 10 ? 15000 : 30000;
+      console.log(`[LuckyBetFeed] WS u mbyll: ${why} — rilidhje pas ${delay / 1000}s (deshtime radhazi: ${this.wsFailures})`);
       setTimeout(() => {
         if (!this.isSleeping && this.running) this.connectWs();
-      }, 5000);
+      }, delay);
     };
-    const ws: WebSocket = new WebSocket(url, { headers: { Origin: 'https://bitgames6205.com' } });
+    const ws: WebSocket = new WebSocket(url, { headers: WS_HEADERS as any });
     this.ws = ws;
     this.wsState = 'connecting';
 
     ws.on('open', () => {
       this.wsState = 'open';
+      this.wsFailures = 0;
       this.lastWsMsgAt = Date.now();
       console.log('[LuckyBetFeed] WS OPEN — handshake i derguar, po abonohemi...');
       ws.send('40');
@@ -935,6 +965,12 @@ export class LuckyBetFeed implements IFeedProvider {
       }
     });
     ws.on('close', (code: number) => reconnect(`close ${code}`));
+    // Nese serveri kthen HTTP (p.sh. 403 i Cloudflare) ne vend te 101 → gabimi shihet qarte.
+    ws.on('unexpected-response', (_req: any, res: any) => {
+      console.error(`[LuckyBetFeed] WS upgrade deshtoi: HTTP ${res?.statusCode} ${res?.statusMessage || ''}`);
+      try { res?.resume?.(); } catch { /* ignore */ }
+      try { ws.terminate(); } catch { /* ignore */ }
+    });
     ws.on('error', (err: Error) => {
       console.error('[LuckyBetFeed] WS error:', err.message);
       try { ws.close(); } catch { /* ignore */ }
