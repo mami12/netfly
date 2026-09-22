@@ -55,9 +55,6 @@ Render-i e **injoron** `.env` (nuk është në git) — çdo variabël vendoset 
 Render-i krijon automatikisht: `NODE_ENV=production`, `JWT_SECRET` (i gjeneruar),
 `CORS_ORIGINS=*`, `LUCKYBET_PARTNER_ID`, `LUCKYBET_API_HOST`, `LUCKYBET_LANGUAGE`.
 
-Render-i krijon automatikisht: `NODE_ENV=production`, `JWT_SECRET` (i gjeneruar),
-`CORS_ORIGINS=*`, `LUCKYBET_PARTNER_ID`, `LUCKYBET_API_HOST`, `LUCKYBET_LANGUAGE`.
-
 ---
 
 ## Hapi 4 — Deploy manual (nëse s'përdor Blueprint)
