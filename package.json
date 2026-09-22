@@ -3,13 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "description": "Netfly Sports Betting Platform - Full-stack sportsbook with simulated live matches",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
   "scripts": {
-    "setup": "cd backend && npm install && npm run setup && cd ../frontend && npm install",
-    "dev": "concurrently \"cd backend && npm run dev\" \"cd frontend && npm run dev\"",
-    "dev:backend": "cd backend && npm run dev",
-    "dev:frontend": "cd frontend && npm run dev",
-    "build": "cd backend && npm run build && cd ../frontend && npm run build",
-    "start": "node backend/dist/index.js"
+    "setup": "npm --prefix backend install --include=dev && npm --prefix backend run setup && npm --prefix frontend install --include=dev",
+    "dev": "concurrently \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix backend install --include=dev && npm --prefix backend run build && npm --prefix backend run db:seed",
+    "build:frontend": "npm --prefix frontend install --include=dev && npm --prefix frontend run build",
+    "build:all": "npm run build && npm run build:frontend",
+    "start": "npm --prefix backend run start"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

@@ -34,6 +34,38 @@ Render-i e **injoron** `.env` (nuk është në git) — çdo variabël vendoset 
 
 ---
 
+## ⚠️ Nëse shërbimi u krijua me cilësimet DEFAULT (gabimi `prisma: not found`)
+
+Kur krijon **New + → Web Service** (pa Blueprint), Render-i e vendos vetë Build Command
+`yarn install; yarn build` dhe **Root Directory bosh**. Atëherë `yarn install` instalon
+vetëm varësitë e rrënjës → `backend/node_modules` mbetet i zbrazët → log-u shfaq:
+
+```
+> prisma generate && prisma db push && tsc
+sh: 1: prisma: not found
+error Command failed with exit code 127.
+```
+
+Repo-ja tani e mbulon **edhe** këtë rast: skriptet e rrënjës (`build`/`start`) instalojnë
+dhe ndërtojnë vetë backend-in me `npm --prefix backend ...`. Pra me cilësimet default
+mjafton të vendosësh env vars (Hapi 3) dhe të bësh **Manual Deploy**.
+
+Konfigurimi i rekomanduar (më i shpejtë, pa punë të panevojshme):
+Settings → **Root Directory = `backend`** · **Build Command = `npm install && npm run build && npm run db:seed`** ·
+**Start Command = `npm start`** · **Health Check Path = `/api/health`** → Save → Manual Deploy.
+
+| | Rrënja e repos (default) | Root Directory = `backend` |
+|---|---|---|
+| Build | `yarn install; yarn build` → (root) → install+build+seed i backend-it | `npm install && npm run build && npm run db:seed` |
+| Start | `yarn start` → (root) → `prisma db push && node dist/index.js` | `npm start` (e njëjta gjë) |
+| Node.js | 22.22.0 (nga `.node-version` në rrënjë) | 22.22.0 (`.node-version` + `engines` në `backend/`) |
+
+> Versione të Node-it: Render-i sot përdor **24.21.0** si default për shërbimet e reja,
+> ndërsa Prisma 5.22 mbulon zyrtarisht 18/20/22 — prandaj repo-ja e fikson **22.22.0**
+> me `.node-version` (+ `engines.node`). Nëse do ta ndryshosh: env var `NODE_VERSION`.
+
+---
+
 ## Hapi 3 — Deploy me Blueprint (rekomanduar: 1 klikim)
 
 1. Hyr në https://dashboard.render.com → **New +** → **Blueprint**.
@@ -127,6 +159,8 @@ Kredencialet e testimit (krijuar nga `prisma/seed.ts`): **`admin` / `admin123`**
 
 | Gabimi në log | Shkaku | Zgjidhja |
 |---|---|---|
+| `sh: 1: prisma: not found` / `exit code 127` | Root Directory bosh + `yarn install` s'instalon varësitë e backend-it | Vendos **Root Directory = `backend`** (ose lëri default-et: skriptet e rrënjës tani i instalojnë vetë) |
+| `info No lockfile found` (yarn) | Nuk ka `yarn.lock` në rrënjë | Info, jo gabim — build-i vazhdon |
 | `Cannot find module '/opt/render/project/src/frontend/dist/index.js'` | Root Directory e gabuar | Vendos **`backend`** |
 | `ENOTFOUND db.<ref>.supabase.co` | Host-i direkt i Supabase = IPv6-only | Përdor **Session pooler** (IPv4, port 5432) |
 | `Timed out fetching a new connection` | Pool-i i Prisma-s mbushet | Shto `&connection_limit=10&pool_timeout=30` në `DATABASE_URL` |

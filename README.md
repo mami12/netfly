@@ -9,6 +9,7 @@ Platformë bastesh sportive me ndeshje reale & të simuluara, kuota dinamike, me
 | `backend/` | API (Express + Prisma/PostgreSQL + WebSocket) — **kjo hostohet në Render.com** |
 | `frontend/` | Klienti React + Vite + Tailwind (GitHub Pages) |
 | `render.yaml` | Blueprint i Render-it (në rrënjë — kështu e lexon Render-i) |
+| `.node-version` | Fikson Node.js **22.22.0** (Render-i default sot: 24.21.0; Prisma 5.22 mbulon 18/20/22) |
 | `docs/` | Manuali i feed-it dhe udhëzuesit e deploy-it |
 
 ## Deploy
