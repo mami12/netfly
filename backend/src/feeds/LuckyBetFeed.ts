@@ -178,6 +178,9 @@ export class LuckyBetFeed implements IFeedProvider {
   private wsState = 'idle';
   private lastWsMsgAt = 0;
   private wsFailures = 0;
+  // Diagnostike: sa frames tepara te lidhjes logohen (handshake) + ora e logut te abonimit.
+  private frameLogs = 0;
+  private lastSubLog = 0;
 
   private oddsCbs: ((delta: OddsDelta) => void)[] = [];
   private statusCbs: ((matchId: string, status: string, minute: number, homeScore: number, awayScore: number, period?: string) => void)[] = [];
@@ -927,20 +930,34 @@ export class LuckyBetFeed implements IFeedProvider {
     this.ws = ws;
     this.wsState = 'connecting';
 
+    // CONNECT-i i namespace-it dergohet VETEM NJE HERE. Me pare dergohej dy here (ne "open"
+    // dhe perseri kur vinte "0{...}") → shkelje e protokollit Socket.IO dhe serveri e mbyllte
+    // lidhjen me "close 1005" menjehere pas ack-ut (pa asnje te dhene).
+    let nsRequested = false;
+    const sendNs = () => {
+      if (nsRequested || ws.readyState !== WebSocket.OPEN) return;
+      nsRequested = true;
+      ws.send('40');
+    };
+
     ws.on('open', () => {
+      // BUG i rregulluar: pa kete, afati 20s vriste edhe lidhjen qe ishte hapur mire.
+      if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
       this.wsState = 'open';
       this.wsFailures = 0;
+      this.frameLogs = 0;
       this.lastWsMsgAt = Date.now();
-      console.log('[LuckyBetFeed] WS OPEN — handshake i derguar, po abonohemi...');
-      ws.send('40');
+      console.log('[LuckyBetFeed] WS OPEN — po pritet handshake-u engine.io (0{...})');
+      // Siguri: nese paketa e handshake-ut nuk vjen brenda 3s, dergohet CONNECT-i gjithsesi.
+      setTimeout(() => sendNs(), 3000).unref?.();
     });
     ws.on('message', (raw: Buffer) => {
       this.lastWsMsgAt = Date.now();
       const frame = raw.toString();
       if (frame === '2') { ws.send('3'); return; }
-      if (frame.startsWith('0')) { ws.send('40'); return; }
+      if (frame.startsWith('0')) { this.logFrame('0 (handshake)', frame); sendNs(); return; }
       // Serveri konfirmon lidhjen (40{...}) -> nis abonimin menjehere
-      if (frame.startsWith('40')) { this.subscribeCycle(); return; }
+      if (frame.startsWith('40')) { this.logFrame('40 (namespace OK)', frame); this.subscribeCycle(); return; }
       if (!frame.startsWith('42')) return;
       let payload: any[];
       try { payload = JSON.parse(frame.slice(2)); } catch { return; }
@@ -987,6 +1004,7 @@ export class LuckyBetFeed implements IFeedProvider {
     watchdog.unref?.();
 
     // Rifresko abonimet Ã§do 30s me ID-tÃ« live aktuale
+    if (this.subTimer) clearInterval(this.subTimer); // pa kete, intervalet rrjdhshin ne çdo ri-lidhje
     this.subTimer = setInterval(() => this.subscribeCycle(), 20000);
   }
 
@@ -1028,6 +1046,12 @@ export class LuckyBetFeed implements IFeedProvider {
 
     const priority = Array.from(this.priorityIds);
     const fullSubs = Array.from(new Set([...live, ...priority]));
+
+    // Diagnostike: sa ndeshje po abonohen (maksimumi nje rresht ne minute).
+    if (Date.now() - this.lastSubLog > 60000) {
+      this.lastSubLog = Date.now();
+      console.log(`[Feed] Abonim: live=${fullSubs.length} near=${near.length} window=${rest.length}`);
+    }
 
     this.sendSub(fullSubs, false);   // live + priority: te gjitha grupet + info
     this.sendSub(near, false);       // prematch i afert: te gjitha grupet
@@ -1181,6 +1205,13 @@ export class LuckyBetFeed implements IFeedProvider {
   private isLiveDbId(dbId: string) {
     const extId = Number(dbId.slice(3));
     return Number.isFinite(extId) && this.liveIds.includes(extId);
+  }
+
+  /** Logon frames e para te çdo lidhjeje (diagnostike e handshake-ut, maksimumi 4). */
+  private logFrame(label: string, frame: string) {
+    if (this.frameLogs >= 4) return;
+    this.frameLogs++;
+    console.log(`[Feed] WS frame #${this.frameLogs}: ${label} — ${frame.slice(0, 110)}`);
   }
 
   /** Çelësi i nje grupi kuotash: id-ja e feed-it (ose emri si rezervë). */
