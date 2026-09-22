@@ -155,6 +155,9 @@ export class LuckyBetFeed implements IFeedProvider {
   // Cache kuotash/tregjish (extId/emri -> treg me kuota) + rreshti i ndeshjes.
   private marketCache = new Map<string, { byExtId: Map<string, any>; byName: Map<string, any>; ts: number }>();
   private matchRowCache = new Map<string, { row: any; ts: number }>();
+  // Gjendja e lidhjes WS + koha e mesazhit te fundit (watchdog + diagnostike).
+  private wsState = 'idle';
+  private lastWsMsgAt = 0;
 
   private oddsCbs: ((delta: OddsDelta) => void)[] = [];
   private statusCbs: ((matchId: string, status: string, minute: number, homeScore: number, awayScore: number, period?: string) => void)[] = [];
@@ -289,7 +292,23 @@ export class LuckyBetFeed implements IFeedProvider {
     this.syncTimer = setInterval(() => this.sync().catch((e) => console.error('[LuckyBetFeed] sync:', e)), 60 * 1000);
     this.connectWs();
 
-    // Diagnostike e perkohshme e feed-it (aktivohet vetem me FEED_DEBUG=1)
+    // Diagnostike: nje rresht çdo 60s (gjithmone aktiv). Tregon menjehere nese WS-ja
+    // jep te dhena dhe sa kuota shkruhen — pa kete, heshtja e feed-it nuk dallohej.
+    const hb = setInterval(() => {
+      console.log(
+        `[Feed] 60s: oddsMsgs=${this.dbg.oddsMsgs} infoMsgs=${this.dbg.infoMsgs} shkruar=${this.dbg.oddsApplied}` +
+          ` live=${this.liveIds.length} pending=${this.pendingOdds.size} busy=${this.oddsBusy.size} db=${this.dbActive}` +
+          ` ws=${this.ws ? (this.ws as any).readyState : 'null'}(${this.wsState})` +
+          ` heshtje=${this.lastWsMsgAt ? Math.round((Date.now() - this.lastWsMsgAt) / 1000) + 's' : '-'}`
+      );
+      this.dbg.oddsMsgs = 0;
+      this.dbg.infoMsgs = 0;
+      this.dbg.oddsApplied = 0;
+      this.dbg.lastLog = Date.now();
+    }, 60000);
+    hb.unref();
+
+    // Diagnostike e detajuar (aktivohet vetem me FEED_DEBUG=1)
     if (process.env.FEED_DEBUG === '1') {
       const t = setInterval(() => {
         const dt = Math.round((Date.now() - this.dbg.lastLog) / 1000);
@@ -777,6 +796,57 @@ export class LuckyBetFeed implements IFeedProvider {
     return `'${String(value).replace(/'/g, "''")}'`;
   }
 
+  /**
+   * Rruga rezerve e shkrimit (si me pare): rresht-per-rresht me Prisma. Perdoret vetem
+   * nese shkrimi ne bllok deshton, qe kuotat te shkruhen ne cdo ambient.
+   */
+  private async fallbackWriteOdds(
+    dbId: string,
+    marketRows: { id: string; extId: string | null; marketType: string; name: string; sortOrder: number }[],
+    outcomeRows: { id: string; marketName: string; name: string; code: string | null; odds: number; status: string }[]
+  ): Promise<boolean> {
+    try {
+      for (const m of marketRows) {
+        await prisma.market.upsert({
+          where: { matchId_name: { matchId: dbId, name: m.name } },
+          create: {
+            id: m.id,
+            matchId: dbId,
+            extId: m.extId,
+            marketType: m.marketType,
+            name: m.name,
+            status: 'ACTIVE',
+            sortOrder: m.sortOrder
+          },
+          update: {
+            extId: m.extId ?? undefined,
+            marketType: m.marketType,
+            sortOrder: m.sortOrder,
+            status: 'ACTIVE'
+          }
+        });
+      }
+      if (!outcomeRows.length) return true;
+
+      const markets = await prisma.market.findMany({ where: { matchId: dbId }, select: { id: true, name: true } });
+      const idByName = new Map(markets.map((m) => [String(m.name).trim(), m.id]));
+      for (const o of outcomeRows) {
+        const marketId = idByName.get(String(o.marketName).trim());
+        if (!marketId) continue;
+        await prisma.outcome.upsert({
+          where: { marketId_name: { marketId, name: o.name } },
+          create: { id: o.id, marketId, name: o.name, code: o.code, odds: o.odds, status: o.status },
+          update: { odds: o.odds, status: o.status, ...(o.code ? { code: o.code } : {}) }
+        });
+      }
+      console.log(`[LuckyBetFeed] Shkrim rezerve: ${marketRows.length} tregje + ${outcomeRows.length} kuota (${dbId})`);
+      return true;
+    } catch (e: any) {
+      console.error('[LuckyBetFeed] fallbackWriteOdds:', e?.message || e);
+      return false;
+    }
+  }
+
    /**
    * Radhe globale mbi punen me DB: nuk lejohen me shume se MAX_DB_TASKS detyra
    * njekohesisht. Pa kete, qindra snapshot-e e mbushin pool-in e Prisma-s dhe
@@ -801,18 +871,41 @@ export class LuckyBetFeed implements IFeedProvider {
   private connectWs() {
     if (this.ws) return;
     const url = `wss://${HOST}/push-server-v2/?Language=${LANG}&externalPartnerId=${PARTNER}&EIO=4&transport=websocket`;
-    const reconnect = () => {
+    // Lidhja qe nuk hapet kurre (SYN i bllokuar nga burimi) mbahej "CONNECTING" per ore
+    // te tera pa asnje gabim e pa asnje te dhene → tani ka afat 20s dhe rifreskohet.
+    let connectTimer: NodeJS.Timeout | null = setTimeout(() => {
+      console.warn('[LuckyBetFeed] WS nuk u hap brenda 20s -> lidhja rifreskohet');
+      try { ws.terminate(); } catch { /* ignore */ }
+    }, 20000);
+    connectTimer.unref?.();
+    let watchdog: NodeJS.Timeout | null = null;
+    const clearTimers = () => {
+      if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+      if (watchdog) { clearInterval(watchdog); watchdog = null; }
+    };
+    const reconnect = (why: string) => {
+      if (this.ws !== ws) return; // ekziston nje lidhje me e re
+      clearTimers();
       this.ws = null;
+      this.wsState = `closed(${why})`;
       if (!this.running || this.isSleeping) return;
+      console.log(`[LuckyBetFeed] WS u mbyll: ${why} — rilidhje pas 5s`);
       setTimeout(() => {
         if (!this.isSleeping && this.running) this.connectWs();
       }, 5000);
     };
     const ws: WebSocket = new WebSocket(url, { headers: { Origin: 'https://bitgames6205.com' } });
     this.ws = ws;
+    this.wsState = 'connecting';
 
-    ws.on('open', () => { ws.send('40'); });
+    ws.on('open', () => {
+      this.wsState = 'open';
+      this.lastWsMsgAt = Date.now();
+      console.log('[LuckyBetFeed] WS OPEN — handshake i derguar, po abonohemi...');
+      ws.send('40');
+    });
     ws.on('message', (raw: Buffer) => {
+      this.lastWsMsgAt = Date.now();
       const frame = raw.toString();
       if (frame === '2') { ws.send('3'); return; }
       if (frame.startsWith('0')) { ws.send('40'); return; }
@@ -841,11 +934,21 @@ export class LuckyBetFeed implements IFeedProvider {
         this.pumpMatch(dbId || 'info');
       }
     });
-    ws.on('close', reconnect);
+    ws.on('close', (code: number) => reconnect(`close ${code}`));
     ws.on('error', (err: Error) => {
       console.error('[LuckyBetFeed] WS error:', err.message);
       try { ws.close(); } catch { /* ignore */ }
     });
+    // Nese per 2 minuta nuk vjen asnje mesazh ndersa lidhja eshte "open" (lidhje zombie),
+    // lidhja rifreskohet. Me pare nje lidhje e tille mbetesh bosh pa asnje gabim.
+    watchdog = setInterval(() => {
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - this.lastWsMsgAt > 120000) {
+        console.warn('[LuckyBetFeed] WS heshtje > 2 minuta -> lidhja rifreskohet');
+        try { ws.terminate(); } catch { /* ignore */ }
+      }
+    }, 30000);
+    watchdog.unref?.();
 
     // Rifresko abonimet Ã§do 30s me ID-tÃ« live aktuale
     this.subTimer = setInterval(() => this.subscribeCycle(), 20000);
@@ -1259,9 +1362,14 @@ export class LuckyBetFeed implements IFeedProvider {
       return;
     }
 
-    // 2) Shkrimi ne DB: tregjet + kuotat me nga NJE deklarate SQL (pa nje operacion per rresht)
-    const savedOk = await this.bulkWriteOdds(dbId, marketRows, outcomeRows);
-    if (!savedOk) this.marketCache.delete(dbId);
+    // 2) Shkrimi ne DB: tregjet + kuotat me nga NJE deklarate SQL (pa nje operacion per rresht).
+    //    Nese shkrimi ne bllok deshton (problem lidhjeje ne hosting), kalon ne rrugen e
+    //    vjeter rresht-per-rresht — kuotat NUK humbin kurre.
+    let savedOk = await this.bulkWriteOdds(dbId, marketRows, outcomeRows);
+    if (!savedOk) {
+      savedOk = await this.fallbackWriteOdds(dbId, marketRows, outcomeRows);
+      this.marketCache.delete(dbId); // id-te mund te kene ndryshuar -> ringarkohen
+    }
 
     // Freskia (lastOddsAt) + ç-pezullimi nese ishte pezulluar per gol — PËRVEÇ nese admini
     // e ka pezulluar manualisht (bllokimi i adminit mbetet derisa ai vetë ta heqë).
